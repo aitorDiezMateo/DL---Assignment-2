@@ -9,16 +9,25 @@ ROUTE = 'data/100k/'
 
 # U.DATA
 df_data = pd.read_csv(ROUTE + 'structured/data.csv')
-df_data['timestamp'] = pd.to_datetime(df_data['timestamp'])
 print(df_data.isna().sum()) # Total number of NAs per column
+#Normalize the timestamp column 
+scaler = StandardScaler()
+df_data['timestamp'] = scaler.fit_transform(df_data['timestamp'].values.reshape(-1, 1))
 # Plot the distribution of ratings
 rating_counts = df_data['rating'].value_counts().sort_index()  
 sns.barplot(x=rating_counts.index, y=rating_counts.values)
 plt.show()
+# Check for duplicates
+print(df_data.duplicated().sum()) # No duplicates
+#Save changes
+df_data.to_csv(ROUTE + 'processed/data.csv', index=False)
 
 # U.ITEM
 df_item = pd.read_csv(ROUTE + 'structured/item.csv')
 print(df_item.isna().sum()) # Total number of NAs per column
+# Normalize the release_date column
+scaler = StandardScaler()
+df_item['release_date'] = scaler.fit_transform(df_item['release_date'].values.reshape(-1, 1))
 # Delete video_release_date column as it has a 100% of NAs
 df_item = df_item.drop(columns='video_release_date')
 # Delete the rest of the columns with NAs
@@ -31,6 +40,8 @@ sns.barplot(x=genre_counts.values, y=genre_counts.index)
 plt.ylabel('Genre')
 plt.xlabel('Count')
 plt.show()
+# As for the moment they don't provide valuable information, drop title and IMDb_URL
+df_item = df_item.drop(columns=['title', 'IMDb_URL'])
 # Save changes
 df_item.to_csv(ROUTE + 'processed/item.csv', index=False)
 
