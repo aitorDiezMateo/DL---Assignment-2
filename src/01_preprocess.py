@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
 
-ROUTE = 'data/100k/'
+ROUTE = '/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/100k/'
 
 # U.DATA
 df_data = pd.read_csv(ROUTE + 'structured/data.csv')
