@@ -63,7 +63,7 @@ class NCF(nn.Module):
         self._init_weights()
         
     def _init_weights(self):
-        """Initialize weights using Xavier/Glorot initialization"""
+        """Initialize weights with modified final layer initialization"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
@@ -71,7 +71,10 @@ class NCF(nn.Module):
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, std=0.01)
-    
+        
+        # Special initialization for final layer
+        nn.init.xavier_normal_(self.final_layer.weight, gain=0.1)  # Smaller initialization
+
     def forward(self, user, item):
         # GMF part
         user_gmf = self.user_embedding_gmf(user)
@@ -467,6 +470,9 @@ def run_training_pipeline(ratings_file, model_config=None, train_config=None):
     if train_config:
         # default_train_config.update(train_config)
         pass
+    
+    #Set random seed
+    torch.manual_seed(42)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
