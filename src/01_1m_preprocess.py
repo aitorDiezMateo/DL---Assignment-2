@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 
 ROUTE = '/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/1M/'
 
-# U.DATA
+# DATA.CSV
 df_data = pd.read_csv(ROUTE + 'structured/data.csv')
 print(df_data.isna().sum()) # Total number of NAs per column
 #Normalize the timestamp column 
@@ -21,3 +21,5 @@ plt.show()
 print(df_data.duplicated().sum()) # No duplicates
 #Save changes
 df_data.to_csv(ROUTE + 'processed/data.csv', index=False)
+
+# 

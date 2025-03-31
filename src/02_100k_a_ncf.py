@@ -57,14 +57,14 @@ class NCF(nn.Module):
             input_dim = dim
         
         # Final output layer (NeuMF Layer)
-        # self.final_layer = nn.Linear(embedding_dim + mlp_dims[-1], 5)
+        self.final_layer = nn.Linear(embedding_dim + mlp_dims[-1], 5)
         
-        self.final_layer = nn.Sequential(
-            nn.Linear(embedding_dim + mlp_dims[-1], 32),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(32, 5)
-        )
+        # self.final_layer = nn.Sequential(
+        #     nn.Linear(embedding_dim + mlp_dims[-1], 32),
+        #     nn.ReLU(),
+        #     nn.Dropout(dropout_rate),
+        #     nn.Linear(32, 5)
+        # )
         
         # Initialize weights
         # self._init_weights()
@@ -397,7 +397,7 @@ def plot_training_history(history):
     plt.legend()
     
     plt.tight_layout()
-    plt.savefig('training_history.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_class.png')
     plt.show()
 
 def plot_confusion_matrix(cm, class_names):
@@ -428,7 +428,7 @@ def plot_confusion_matrix(cm, class_names):
                     color="white" if cm[i, j] > thresh else "black")
     
     fig.tight_layout()
-    plt.savefig('confusion_matrix.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_class.png')
     plt.show()
     return ax
 

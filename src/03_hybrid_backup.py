@@ -49,8 +49,7 @@ class HybridNCF(nn.Module):
                 l2_regularization=1e-4,  # Added L2 regularization
                 use_batch_norm=True,
                 num_user_features=25,
-                num_item_features=19,
-                num_classes=5): # Added num_classes
+                num_item_features=19):
         super(HybridNCF, self).__init__()
         
         # Add L2 regularization to embeddings
@@ -71,12 +70,9 @@ class HybridNCF(nn.Module):
             input_dim = dim
             
         # Final prediction layers
-        self.gmf_output = nn.Linear(embedding_dim, mlp_dims[-1]) # Output features from GMF
-        self.mlp_output = nn.Linear(mlp_dims[-1], mlp_dims[-1]) # Output features from MLP
-        
-        # Combine features before final classification layer
-        combined_dim = mlp_dims[-1] * 2 
-        self.final_output = nn.Linear(combined_dim, num_classes) # Output 5 logits for classification
+        self.gmf_output = nn.Linear(embedding_dim, 1)
+        self.mlp_output = nn.Linear(mlp_dims[-1], 1)
+        self.final_output = nn.Linear(2, 1)
         
         # Initialize weights
         self._init_weights()
@@ -92,34 +88,46 @@ class HybridNCF(nn.Module):
                 nn.init.normal_(module.weight, std=0.01)
                 
     def forward(self, user_indices, item_indices, user_features, item_features):
-        # GMF path
+        # GMF path with added batch normalization
         user_embed_gmf = self.user_embedding_gmf_cf(user_indices)
         item_embed_gmf = self.item_embedding_gmf_cf(item_indices)
         gmf_vector = user_embed_gmf * item_embed_gmf
-        gmf_features = F.relu(self.gmf_output(gmf_vector)) # Get features from GMF
         
-        # MLP path
+        # Add batch normalization to GMF path
+        if hasattr(self, 'bn_gmf'):
+            gmf_vector = self.bn_gmf(gmf_vector)
+        
+        gmf_output = self.gmf_output(gmf_vector)
+        
+        # MLP path (concatenation of embeddings and features)
         user_embed_mlp = self.user_embedding_mlp_cf(user_indices)
         item_embed_mlp = self.item_embedding_mlp_cf(item_indices)
-        mlp_input_vector = torch.cat([
+        
+        
+        # Concatenate all inputs for MLP path
+        mlp_vector = torch.cat([
             user_embed_mlp,
             item_embed_mlp,
             user_features,
             item_features
         ], dim=1)
-        mlp_processed_vector = mlp_input_vector
+        
+        # Process through MLP layers
         for layer in self.mlp_layers:
-             mlp_processed_vector = layer(mlp_processed_vector)
-        mlp_features = F.relu(self.mlp_output(mlp_processed_vector)) # Get features from MLP
+            mlp_vector = layer(mlp_vector)
         
-        # Combine features from GMF and MLP paths
-        combined_features = torch.cat([gmf_features, mlp_features], dim=1)
+        # MLP output
+        mlp_output = self.mlp_output(mlp_vector)
         
-        # Final classification layer
-        logits = self.final_output(combined_features) 
-        # No softmax needed here, CrossEntropyLoss applies it internally
+        # Combine GMF and MLP outputs
+        combined = torch.cat([gmf_output, mlp_output], dim=1)
+        prediction = self.final_output(combined)
         
-        return logits # Return logits for classification loss
+        # For rating prediction (1-5), no activation is needed for regression
+        # You could add a sigmoid/tanh + scaling if you want to constrain the range
+        # prediction = 1.0 + 4.0 * torch.sigmoid(prediction)  # Scale to [1,5]
+        
+        return prediction.squeeze()
 
 class MovieLensDataset(Dataset):
     def __init__(self, data):
@@ -129,7 +137,7 @@ class MovieLensDataset(Dataset):
         self.items = torch.tensor(data['item_id'].values, dtype=torch.long)
         self.user_features = torch.tensor(data[USER_FEATURES].astype(float).values, dtype=torch.float32)
         self.item_features = torch.tensor(data[ITEM_FEATURES].astype(float).values, dtype=torch.float32)
-        self.ratings = torch.tensor(data['rating'].values - 1, dtype=torch.long)
+        self.ratings = torch.tensor(data['rating'].values, dtype=torch.float)
     
     def __len__(self):
         return len(self.users)
@@ -166,20 +174,14 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
     noise_level = 0.05
     train_df[USER_FEATURES] = train_df[USER_FEATURES] * (1 + np.random.normal(0, noise_level, train_df[USER_FEATURES].shape))
     
-    # Calculate class weights for CrossEntropyLoss
-    ratings_for_weights = train_df['rating'].values.astype(int) - 1 # 0-indexed ratings
-    class_counts = np.bincount(ratings_for_weights)
-    class_weights = 1. / torch.tensor(class_counts, dtype=torch.float)
-    class_weights = class_weights / class_weights.sum() * len(class_counts) # Normalize weights
-
     train_dataset = MovieLensDataset(train_df)
     val_dataset = MovieLensDataset(val_df)
     test_dataset = MovieLensDataset(test_df)
     
-    return train_dataset, val_dataset, test_dataset, n_users, n_items, class_weights
+    return train_dataset, val_dataset, test_dataset, n_users, n_items
 
 
-def train_model(model, train_loader, val_loader, optimizer, device, class_weights, num_epochs=20, checkpoint_dir='./checkpoints', patience=5):
+def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=20, checkpoint_dir='./checkpoints', patience=5):
     # Add learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
@@ -191,10 +193,8 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     model = model.to(device)
-    class_weights = class_weights.to(device) # Move weights to device
-
-    # Use CrossEntropyLoss with class weights
-    criterion = nn.CrossEntropyLoss(weight=class_weights) 
+    
+    criterion = nn.MSELoss()
     
     # Initialize tracking variables
     best_val_loss = np.inf
@@ -218,7 +218,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
             
             outputs = model(users, items, user_features, item_features)
             
-            loss = criterion(outputs, ratings)
+            loss = criterion(outputs, ratings.float())
             
             loss.backward()
             
@@ -247,13 +247,11 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
                 
                 outputs = model(users, items, user_features, item_features)
                 
-                loss = criterion(outputs, ratings)
+                loss = criterion(outputs, ratings.float())
                 
                 val_loss += loss.item()
                 
-                # Get predicted class (highest logit) for accuracy/confusion matrix
-                _, predicted_classes = torch.max(outputs, 1)
-                all_preds.extend(predicted_classes.cpu().numpy())
+                all_preds.extend(outputs.cpu().numpy())
                 all_labels.extend(ratings.cpu().numpy())
         
         avg_val_loss = val_loss / len(val_loader)
@@ -304,41 +302,36 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
     return model, history
 
 
-def evaluate_model(model, test_loader, device, class_weights):
+def evaluate_model(model, test_loader, device):
     model.eval()
     test_loss = 0.0
-    all_preds = []  # Store predicted class indices (argmax)
-    all_labels = [] # Store true labels
-    all_probs = []  # Store predicted probabilities for each class
-
-    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-
+    all_preds = []
+    all_labels = []
+    
+    
+    criterion = nn.MSELoss()
+    
     with torch.no_grad():
         for users, items, user_features, item_features, ratings in test_loader:
             users, items, user_features, item_features, ratings = users.to(device), items.to(device), user_features.to(device), item_features.to(device), ratings.to(device)
-
-            outputs = model(users, items, user_features, item_features) # These are logits
-
-            loss = criterion(outputs, ratings)
+            
+            outputs = model(users, items, user_features, item_features)
+            
+            loss = criterion(outputs, ratings.float())
+            
             test_loss += loss.item()
-
-            # Calculate probabilities using softmax
-            probabilities = torch.softmax(outputs, dim=1)
-            all_probs.extend(probabilities.cpu().numpy())
-
-            # Get predicted class index for other metrics if needed (e.g., accuracy)
-            _, predicted_classes = torch.max(outputs, 1)
-            all_preds.extend(predicted_classes.cpu().numpy())
+            
+            all_preds.extend(outputs.cpu().numpy())
             all_labels.extend(ratings.cpu().numpy())
-
+    
+        # Calculate metrics
     avg_test_loss = test_loss / len(test_loader)
-    print(f'Test Loss (CrossEntropy): {avg_test_loss:.4f}')
-
+    print(f'Test Loss (MSE): {avg_test_loss:.4f}')
+    
     return {
         'test_loss': avg_test_loss,
-        'predictions': all_preds,    # Predicted class index (0-4)
-        'true_labels': all_labels, # True class index (0-4)
-        'probabilities': all_probs # Predicted probabilities (n_samples, n_classes)
+        'predictions': all_preds,
+        'true_labels': all_labels
     }
 
 def plot_training_history(history):
@@ -390,63 +383,60 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_hybrid.png')
     plt.show()
 
-def plot_roc_auc(probabilities, actuals, classes=None):
+def plot_roc_auc(predictions, actuals, classes=None):
     """
-    Plot ROC AUC curve for a multi-class classification model.
+    Plot ROC AUC curve for a regression model predicting ratings.
+    We need to convert the regression problem to binary classification problems
+    (one-vs-rest) for each rating class.
 
     Args:
-        probabilities (list or np.array): Predicted probabilities (shape: [n_samples, n_classes]).
-        actuals (list or np.array): Actual class labels (0-indexed).
-        classes (list): List of class display names (e.g., [1, 2, 3, 4, 5]).
-                        The length must match the number of classes.
+        predictions (list or np.array): Predicted ratings.
+        actuals (list or np.array): Actual class labels.
+        classes (list): List of possible rating values.
     """
-    probabilities = np.array(probabilities)
+    predictions = np.array(predictions)
     actuals = np.array(actuals)
-    n_classes = probabilities.shape[1]
-
-    if classes is None:
-        classes = [f"Class {i+1}" for i in range(n_classes)]
-    elif len(classes) != n_classes:
-        raise ValueError("Length of 'classes' must match the number of classes in 'probabilities'")
-
-
-    # Compute ROC curve and AUC for each class using One-vs-Rest
+    n_classes = len(classes)
+    
+    # Compute ROC curve and AUC for each class
     fpr, tpr, roc_auc = {}, {}, {}
-
+    
     plt.figure(figsize=(10, 8))
-    # Define distinct colors for potentially more classes
-    colors = cycle(['blue', 'red', 'green', 'purple', 'orange', 'cyan', 'magenta', 'yellow', 'black', 'grey'])
-
-    for i in range(n_classes):
-        # Get the probability scores for the current class
-        class_scores = probabilities[:, i]
-
-        # Create binary labels for the current class (One-vs-Rest)
-        binary_actuals = (actuals == i).astype(int)
-
-        # Compute ROC curve and AUC
-        fpr[i], tpr[i], _ = roc_curve(binary_actuals, class_scores)
+    colors = cycle(['blue', 'red', 'green', 'purple', 'orange'])
+    
+    for i, rating_class in enumerate(classes):
+        # For each rating, create a binary classification problem
+        # Did we correctly predict this specific rating?
+        binary_actuals = (actuals == rating_class).astype(int)
+        
+        # For the prediction score, use how close the prediction was to this rating
+        # Closer predictions are more confident for this class
+        # Using negative absolute difference as the "score"
+        prediction_scores = -np.abs(predictions - rating_class)
+        
+        # Compute ROC curve
+        fpr[i], tpr[i], _ = roc_curve(binary_actuals, prediction_scores)
         roc_auc[i] = auc(fpr[i], tpr[i])
-
+        
         # Plot ROC curve for this class
         plt.plot(fpr[i], tpr[i], color=next(colors), lw=2,
-                 label=f'{classes[i]} (AUC = {roc_auc[i]:.2f})') # Use display names from classes arg
-
+                 label=f'Rating {rating_class} (AUC = {roc_auc[i]:.2f})')
+    
     # Plot diagonal line (random classifier)
-    plt.plot([0, 1], [0, 1], 'k--', lw=2, label='Random Chance')
-
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('ROC Curves (One-vs-Rest)')
+    plt.title('ROC Curves for Rating Prediction')
     plt.legend(loc="lower right")
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/roc_auc_curve_hybrid_classification.png') # Consider new name
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/roc_auc_curve_hybrid.png')
     plt.show()
 
 def run_training_pipeline(ratings_file, users_file, movies_file,model_config=None, train_config=None):
-    # Default configurations
+        # Default configurations
     default_model_config = {
         "embedding_dim": 16,
         "mlp_dims": [256, 128, 64],
@@ -483,7 +473,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     
     # Prepare datasets
     print("Preparing datasets...")
-    train_dataset, val_dataset, test_dataset, n_users, n_items, class_weights = prepare_datasets(ratings_file, users_file, movies_file)
+    train_dataset, val_dataset, test_dataset, n_users, n_items = prepare_datasets(ratings_file, users_file, movies_file)
     
         # Create data loaders
     train_loader = DataLoader(
@@ -519,8 +509,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
         dropout_rate=default_model_config["dropout_rate"],
         use_batch_norm=default_model_config["use_batch_norm"],
         num_user_features=len(USER_FEATURES),
-        num_item_features=len(ITEM_FEATURES),
-        num_classes=5
+        num_item_features=len(ITEM_FEATURES)
     )
     
     optimizer = optim.Adam(
@@ -537,35 +526,22 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
         val_loader, 
         optimizer,
         device=device,
-        class_weights=class_weights,
         num_epochs=default_train_config["num_epochs"],
         patience=default_train_config["patience"]
     )
     
     print("Training completed!")
     print("Evaluatiing model on test set...")
-    results = evaluate_model(trained_model, test_loader, device, class_weights)
+    results = evaluate_model(trained_model, test_loader, device)
     
     # Plot training history
     plot_training_history(history)
     
-    # Convert lists to NumPy arrays first, then add 1
-    predictions_np = np.array(results['predictions']) 
-    true_labels_np = np.array(results['true_labels'])
+    # Plot confusion matrix
+    plot_confusion_matrix(results['predictions'], results['true_labels'], classes=[1, 2, 3, 4, 5])
     
-    # Now add 1 to convert from 0-4 to 1-5 scale for display
-    plot_confusion_matrix(
-        predictions_np + 1, 
-        true_labels_np + 1, 
-        classes=[1, 2, 3, 4, 5]
-    )
-    
-    # ROC AUC works with 0-indexed values and the raw probabilities
-    plot_roc_auc(
-        results['probabilities'], 
-        results['true_labels'], 
-        classes=[1, 2, 3, 4, 5]
-    )
+    # Plot ROC AUC curve
+    plot_roc_auc(results['predictions'], results['true_labels'], classes=[1, 2, 3, 4, 5])
     
     return trained_model, history, results
 

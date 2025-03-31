@@ -356,7 +356,7 @@ def plot_training_history(history):
     plt.title('Training and Validation Loss')
     plt.legend()
     plt.tight_layout()
-    plt.savefig('training_history_reg.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_reg.png')
     plt.show()
 
 def plot_predictions_vs_actuals(predictions, actuals):
@@ -403,7 +403,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
     plt.ylabel('Actual Ratings')
     plt.title('Confusion Matrix')
     plt.tight_layout()
-    plt.savefig('confusion_matrix_reg.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_reg.png')
     plt.show()
 
 def get_class_weights(train_loader,device):

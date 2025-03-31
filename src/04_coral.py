@@ -22,6 +22,11 @@ import os
 import seaborn as sns
 from sklearn.metrics import roc_curve, auc
 from itertools import cycle
+from coral_pytorch.layers import CoralLayer
+from coral_pytorch.losses import coral_loss
+from coral_pytorch.dataset import proba_to_label
+from coral_pytorch.dataset import levels_from_labelbatch
+
 
 
 ROUTE = "/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/100k/processed"
@@ -31,22 +36,21 @@ USER_FEATURES = ['age', 'gender_F','gender_M', 'occupation_administrator', 'occu
 
 ITEM_FEATURES = ['unknown','Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime','Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'Musical','Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western']
 
-ratings_df = pd.read_csv(ROUTE + "/data.csv")
-users_df = pd.read_csv(ROUTE + "/user.csv")
-movies_df = pd.read_csv(ROUTE + "/item.csv")
+# ratings_df = pd.read_csv(ROUTE + "/data.csv")
+# users_df = pd.read_csv(ROUTE + "/user.csv")
+# movies_df = pd.read_csv(ROUTE + "/item.csv")
 
-data = ratings_df.merge(users_df, on='user_id', how='left')
-data = data.merge(movies_df, on='item_id', how='left')
+# data = ratings_df.merge(users_df, on='user_id', how='left')
+# data = data.merge(movies_df, on='item_id', how='left')
 
-n_users = data['user_id'].nunique()
-n_items = data['item_id'].nunique()
+# n_users = data['user_id'].nunique()
+# n_items = data['item_id'].nunique()
 
 class HybridNCF(nn.Module):
     def __init__(self, num_users, num_items,
                 embedding_dim=32,  # Reduced from 64
                 mlp_dims=[128, 64], # Simplified architecture
-                dropout_rate=0.5,  # Increased from 0.2
-                l2_regularization=1e-4,  # Added L2 regularization
+                dropout_rate=0.5, 
                 use_batch_norm=True,
                 num_user_features=25,
                 num_item_features=19,
@@ -76,7 +80,7 @@ class HybridNCF(nn.Module):
         
         # Combine features before final classification layer
         combined_dim = mlp_dims[-1] * 2 
-        self.final_output = nn.Linear(combined_dim, num_classes) # Output 5 logits for classification
+        self.final_output = CoralLayer(combined_dim, num_classes)
         
         # Initialize weights
         self._init_weights()
@@ -117,7 +121,6 @@ class HybridNCF(nn.Module):
         
         # Final classification layer
         logits = self.final_output(combined_features) 
-        # No softmax needed here, CrossEntropyLoss applies it internally
         
         return logits # Return logits for classification loss
 
@@ -191,10 +194,11 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     model = model.to(device)
-    class_weights = class_weights.to(device) # Move weights to device
-
-    # Use CrossEntropyLoss with class weights
-    criterion = nn.CrossEntropyLoss(weight=class_weights) 
+    # For Coral, we don't need class weights in the same way
+    
+    # Replace CrossEntropyLoss with the coral_loss function
+    criterion = coral_loss
+    
     
     # Initialize tracking variables
     best_val_loss = np.inf
@@ -213,12 +217,14 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
         for batch_idx, (users, items, user_features, item_features, ratings) in enumerate(train_loader):
             users, items, user_features, item_features, ratings = users.to(device), items.to(device), user_features.to(device), item_features.to(device), ratings.to(device)
             
-            
             optimizer.zero_grad()
             
             outputs = model(users, items, user_features, item_features)
             
-            loss = criterion(outputs, ratings)
+            levels = levels_from_labelbatch(ratings, num_classes=5)
+            
+            # Coral loss expects continuous labels, not class indices
+            loss = criterion(outputs, levels.to(device))
             
             loss.backward()
             
@@ -247,7 +253,9 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
                 
                 outputs = model(users, items, user_features, item_features)
                 
-                loss = criterion(outputs, ratings)
+                levels = levels_from_labelbatch(ratings, num_classes=5)
+                
+                loss = criterion(outputs, levels.to(device))
                 
                 val_loss += loss.item()
                 
@@ -311,28 +319,31 @@ def evaluate_model(model, test_loader, device, class_weights):
     all_labels = [] # Store true labels
     all_probs = []  # Store predicted probabilities for each class
 
-    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+    criterion = coral_loss
 
     with torch.no_grad():
         for users, items, user_features, item_features, ratings in test_loader:
             users, items, user_features, item_features, ratings = users.to(device), items.to(device), user_features.to(device), item_features.to(device), ratings.to(device)
 
-            outputs = model(users, items, user_features, item_features) # These are logits
+            outputs = model(users, items, user_features, item_features) # These are coral logits
 
-            loss = criterion(outputs, ratings)
+            
+            levels = levels_from_labelbatch(ratings, num_classes=5)
+            
+            loss = criterion(outputs, levels.to(device))
             test_loss += loss.item()
 
-            # Calculate probabilities using softmax
+            # For Coral, we need to convert logits to class probabilities differently
             probabilities = torch.softmax(outputs, dim=1)
             all_probs.extend(probabilities.cpu().numpy())
 
-            # Get predicted class index for other metrics if needed (e.g., accuracy)
-            _, predicted_classes = torch.max(outputs, 1)
+            # Get predicted class index (levels start at 0)
+            predicted_classes = proba_to_label(probabilities)
             all_preds.extend(predicted_classes.cpu().numpy())
             all_labels.extend(ratings.cpu().numpy())
 
     avg_test_loss = test_loss / len(test_loader)
-    print(f'Test Loss (CrossEntropy): {avg_test_loss:.4f}')
+    print(f'Test Loss (Coral): {avg_test_loss:.4f}')
 
     return {
         'test_loss': avg_test_loss,
@@ -368,13 +379,13 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
         classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
     """
     # Round predictions to the nearest integer
-    rounded_preds = np.rint(predictions).astype(int)
+    # rounded_preds = np.rint(predictions).astype(int)
     
     # Compute confusion matrix
-    cm = confusion_matrix(actuals, rounded_preds, labels=classes)
+    cm = confusion_matrix(actuals, predictions, labels=classes)
     
     # Compute accuracy and print it
-    accuracy = accuracy_score(actuals, rounded_preds)
+    accuracy = accuracy_score(actuals, predictions)
     print(f'Accuracy: {accuracy:.4f}')
     
     print('Confusion Matrix:')
