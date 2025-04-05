@@ -29,7 +29,7 @@ from coral_pytorch.dataset import levels_from_labelbatch
 
 
 
-ROUTE = "/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/100k/processed"
+ROUTE = "/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/1M/processed"
 
 USER_FEATURES = ['age', 'gender_F','gender_M', 'occupation_administrator', 'occupation_artist',       'occupation_doctor', 'occupation_educator', 'occupation_engineer', 'occupation_entertainment', 'occupation_executive', 'occupation_healthcare', 'occupation_homemaker','occupation_lawyer','occupation_librarian', 'occupation_marketing', 'occupation_none','occupation_other', 'occupation_programmer', 'occupation_retired','occupation_salesman', 'occupation_scientist', 'occupation_student',
 'occupation_technician', 'occupation_writer', 'release_date']
