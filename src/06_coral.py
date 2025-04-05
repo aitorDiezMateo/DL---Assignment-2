@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
@@ -375,11 +375,33 @@ with torch.no_grad():
 avg_test_loss = test_loss / len(test_loader)
 print(f'Test Loss (Coral): {avg_test_loss:.4f}')
 
+# Convert to numpy arrays
+all_preds = np.array(all_preds)
+all_labels = np.array(all_labels)
+
 # Calculate accuracy
 correct = sum(1 for pred, true in zip(all_preds, all_labels) if pred == true)
 total = len(all_preds)
 accuracy = correct / total
 print(f'Test Accuracy: {accuracy:.4f}')
+
+# Calculate classification metrics
+precision = precision_score(all_labels, all_preds, average='macro')
+recall = recall_score(all_labels, all_preds, average='macro')
+f1 = f1_score(all_labels, all_preds, average='macro')
+
+# Calculate regression metrics - convert 0-4 scale back to 1-5 for better interpretability
+all_preds_reg = all_preds + 1
+all_labels_reg = all_labels + 1
+mae = mean_absolute_error(all_labels_reg, all_preds_reg)
+rmse = np.sqrt(mean_squared_error(all_labels_reg, all_preds_reg))
+
+# Print all metrics
+print(f'Precision: {precision:.4f}')
+print(f'Recall: {recall:.4f}')
+print(f'F1-Score: {f1:.4f}')
+print(f'MAE: {mae:.4f}')
+print(f'RMSE: {rmse:.4f}')
 
 #Confusion matrix
 cm = confusion_matrix(all_labels, all_preds)
@@ -389,4 +411,44 @@ plt.xlabel('Predicted Ratings')
 plt.ylabel('Actual Ratings')
 plt.title('Confusion Matrix')
 plt.tight_layout()
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_coral.png')
+plt.show()
+
+# Plot metrics in bar charts
+plt.figure(figsize=(10, 6))
+metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+metric_values = [accuracy, precision, recall, f1]
+
+bars = plt.bar(metric_names, metric_values, color=['blue', 'green', 'orange', 'red'])
+
+# Add values on top of bars
+for bar in bars:
+    height = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+             f'{height:.4f}', ha='center', va='bottom')
+
+plt.ylim(0, 1.1)  # Set y-axis limit
+plt.ylabel('Score')
+plt.title('Classification Metrics')
+plt.tight_layout()
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_coral.png')
+plt.show()
+
+# Plot regression metrics
+plt.figure(figsize=(8, 5))
+regression_metrics = ['MAE', 'RMSE']
+regression_values = [mae, rmse]
+
+bars = plt.bar(regression_metrics, regression_values, color=['purple', 'teal'])
+
+# Add values on top of bars
+for bar in bars:
+    height = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+             f'{height:.4f}', ha='center', va='bottom')
+
+plt.ylabel('Error')
+plt.title('Regression Metrics')
+plt.tight_layout()
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_coral.png')
 plt.show()

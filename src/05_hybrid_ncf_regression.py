@@ -13,7 +13,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
@@ -324,14 +324,44 @@ def evaluate_model(model, test_loader, device):
             all_preds.extend(outputs.cpu().numpy())
             all_labels.extend(ratings.cpu().numpy())
     
-        # Calculate metrics
+    # Calculate metrics
     avg_test_loss = test_loss / len(test_loader)
     print(f'Test Loss (MSE): {avg_test_loss:.4f}')
+    
+    # Convert predictions to rounded integers for classification metrics
+    rounded_preds = np.rint(all_preds).astype(int)
+    
+    # Ensure predictions are within valid range (1-5)
+    rounded_preds = np.clip(rounded_preds, 1, 5)
+    
+    # Calculate regression metrics
+    mae = mean_absolute_error(all_labels, all_preds)
+    rmse = np.sqrt(mean_squared_error(all_labels, all_preds))
+    
+    # Calculate classification metrics
+    precision = precision_score(all_labels, rounded_preds, average='macro')
+    recall = recall_score(all_labels, rounded_preds, average='macro')
+    f1 = f1_score(all_labels, rounded_preds, average='macro')
+    accuracy = accuracy_score(all_labels, rounded_preds)
+    
+    # Print all metrics
+    print(f'Accuracy: {accuracy:.4f}')
+    print(f'Precision: {precision:.4f}')
+    print(f'Recall: {recall:.4f}')
+    print(f'F1-Score: {f1:.4f}')
+    print(f'MAE: {mae:.4f}')
+    print(f'RMSE: {rmse:.4f}')
     
     return {
         'test_loss': avg_test_loss,
         'predictions': all_preds,
-        'true_labels': all_labels
+        'true_labels': all_labels,
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'mae': mae,
+        'rmse': rmse
     }
 
 def plot_training_history(history):
@@ -351,7 +381,7 @@ def plot_training_history(history):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_hybrid.png')
     plt.show()
 
-def plot_confusion_matrix(predictions, actuals, classes=None):
+def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     """
     Plot a confusion matrix for the predicted and actual ratings.
 
@@ -359,16 +389,29 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
         predictions (list or np.array): Predicted ratings.
         actuals (list or np.array): Actual ratings.
         classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
+        metrics (dict): Dictionary containing evaluation metrics (optional).
     """
     # Round predictions to the nearest integer
     rounded_preds = np.rint(predictions).astype(int)
     
+    # Ensure predictions are within valid range
+    rounded_preds = np.clip(rounded_preds, 1, 5)
+    
     # Compute confusion matrix
     cm = confusion_matrix(actuals, rounded_preds, labels=classes)
     
-    # Compute accuracy and print it
-    accuracy = accuracy_score(actuals, rounded_preds)
-    print(f'Accuracy: {accuracy:.4f}')
+    # Print metrics if provided, otherwise compute accuracy
+    if metrics:
+        print(f'Accuracy: {metrics["accuracy"]:.4f}')
+        print(f'Precision: {metrics["precision"]:.4f}')
+        print(f'Recall: {metrics["recall"]:.4f}')
+        print(f'F1-Score: {metrics["f1"]:.4f}')
+        print(f'MAE: {metrics["mae"]:.4f}')
+        print(f'RMSE: {metrics["rmse"]:.4f}')
+    else:
+        # Compute accuracy and print it (fallback if metrics not provided)
+        accuracy = accuracy_score(actuals, rounded_preds)
+        print(f'Accuracy: {accuracy:.4f}')
     
     print('Confusion Matrix:')
     print(cm)
@@ -381,6 +424,53 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
     plt.title('Confusion Matrix')
     plt.tight_layout()
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_hybrid.png')
+    plt.show()
+
+def plot_metrics(metrics):
+    """
+    Plot all evaluation metrics in a bar chart.
+    
+    Args:
+        metrics (dict): Dictionary containing evaluation metrics.
+    """
+    # Metrics to plot
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+    metric_values = [metrics['accuracy'], metrics['precision'], 
+                     metrics['recall'], metrics['f1']]
+    
+    plt.figure(figsize=(10, 6))
+    bars = plt.bar(metric_names, metric_values, color=['blue', 'green', 'orange', 'red'])
+    
+    # Add values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom')
+    
+    plt.ylim(0, 1.1)  # Set y-axis limit
+    plt.ylabel('Score')
+    plt.title('Classification Metrics')
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_hybrid.png')
+    plt.show()
+    
+    # Plot regression metrics (MAE and RMSE) separately
+    plt.figure(figsize=(8, 5))
+    regression_metrics = ['MAE', 'RMSE']
+    regression_values = [metrics['mae'], metrics['rmse']]
+    
+    bars = plt.bar(regression_metrics, regression_values, color=['purple', 'teal'])
+    
+    # Add values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom')
+    
+    plt.ylabel('Error')
+    plt.title('Regression Metrics')
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_hybrid.png')
     plt.show()
 
 def plot_roc_auc(predictions, actuals, classes=None):
@@ -538,7 +628,11 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     plot_training_history(history)
     
     # Plot confusion matrix
-    plot_confusion_matrix(results['predictions'], results['true_labels'], classes=[1, 2, 3, 4, 5])
+    plot_confusion_matrix(results['predictions'], results['true_labels'], 
+                         classes=[1, 2, 3, 4, 5], metrics=results)
+    
+    # Plot metrics
+    plot_metrics(results)
     
     # Plot ROC AUC curve
     plot_roc_auc(results['predictions'], results['true_labels'], classes=[1, 2, 3, 4, 5])

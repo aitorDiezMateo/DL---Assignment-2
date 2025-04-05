@@ -13,7 +13,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
@@ -307,38 +307,80 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
 def evaluate_model(model, test_loader, device, class_weights):
     model.eval()
     test_loss = 0.0
-    all_preds = []  # Store predicted class indices (argmax)
-    all_labels = [] # Store true labels
-    all_probs = []  # Store predicted probabilities for each class
-
+    all_preds = []
+    all_labels = []
+    all_probs = []
+    all_outputs_raw = []
+    
+    # Use CrossEntropyLoss with class weights for evaluation
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-
+    
     with torch.no_grad():
         for users, items, user_features, item_features, ratings in test_loader:
             users, items, user_features, item_features, ratings = users.to(device), items.to(device), user_features.to(device), item_features.to(device), ratings.to(device)
-
-            outputs = model(users, items, user_features, item_features) # These are logits
-
+            
+            outputs = model(users, items, user_features, item_features)
+            
             loss = criterion(outputs, ratings)
             test_loss += loss.item()
-
-            # Calculate probabilities using softmax
-            probabilities = torch.softmax(outputs, dim=1)
-            all_probs.extend(probabilities.cpu().numpy())
-
-            # Get predicted class index for other metrics if needed (e.g., accuracy)
-            _, predicted_classes = torch.max(outputs, 1)
-            all_preds.extend(predicted_classes.cpu().numpy())
+            
+            # Get class probabilities
+            probs = F.softmax(outputs, dim=1)
+            all_probs.extend(probs.cpu().numpy())
+            
+            # Get predicted classes
+            _, preds = torch.max(outputs, 1)
+            all_preds.extend(preds.cpu().numpy())
             all_labels.extend(ratings.cpu().numpy())
-
+            
+            # Calculate regression-equivalent outputs (weighted average of class probabilities)
+            # For computing MAE and RMSE
+            rating_values = torch.tensor([0, 1, 2, 3, 4], device=device).float()  # Rating classes (0-indexed)
+            expected_ratings = torch.sum(probs * rating_values.unsqueeze(0), dim=1)
+            # Convert back to 1-5 scale for metrics
+            expected_ratings = expected_ratings + 1  
+            all_outputs_raw.extend(expected_ratings.cpu().numpy())
+    
+    # Calculate metrics
     avg_test_loss = test_loss / len(test_loader)
-    print(f'Test Loss (CrossEntropy): {avg_test_loss:.4f}')
-
+    accuracy = accuracy_score(all_labels, all_preds)
+    precision = precision_score(all_labels, all_preds, average='macro')
+    recall = recall_score(all_labels, all_preds, average='macro')
+    f1 = f1_score(all_labels, all_preds, average='macro')
+    
+    # Convert true labels from 0-indexed to 1-5 scale for regression metrics
+    true_ratings = np.array(all_labels) + 1
+    
+    # Calculate regression metrics
+    mae = mean_absolute_error(true_ratings, all_outputs_raw)
+    rmse = np.sqrt(mean_squared_error(true_ratings, all_outputs_raw))
+    
+    # Print all metrics
+    print(f'Test Loss: {avg_test_loss:.4f}')
+    print(f'Accuracy: {accuracy:.4f}')
+    print(f'Precision: {precision:.4f}')
+    print(f'Recall: {recall:.4f}')
+    print(f'F1-Score: {f1:.4f}')
+    print(f'MAE: {mae:.4f}')
+    print(f'RMSE: {rmse:.4f}')
+    
+    # Compute confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
+    print('Confusion Matrix:')
+    print(cm)
+    
     return {
         'test_loss': avg_test_loss,
-        'predictions': all_preds,    # Predicted class index (0-4)
-        'true_labels': all_labels, # True class index (0-4)
-        'probabilities': all_probs # Predicted probabilities (n_samples, n_classes)
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'mae': mae,
+        'rmse': rmse,
+        'confusion_matrix': cm,
+        'predictions': all_preds,
+        'true_labels': all_labels,
+        'probabilities': all_probs
     }
 
 def plot_training_history(history):
@@ -358,7 +400,7 @@ def plot_training_history(history):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_hybrid.png')
     plt.show()
 
-def plot_confusion_matrix(predictions, actuals, classes=None):
+def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     """
     Plot a confusion matrix for the predicted and actual ratings.
 
@@ -366,28 +408,78 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
         predictions (list or np.array): Predicted ratings.
         actuals (list or np.array): Actual ratings.
         classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
+        metrics (dict): Dictionary containing evaluation metrics (optional).
     """
-    # Round predictions to the nearest integer
-    rounded_preds = np.rint(predictions).astype(int)
-    
     # Compute confusion matrix
-    cm = confusion_matrix(actuals, rounded_preds, labels=classes)
+    cm = confusion_matrix(actuals, predictions)
     
-    # Compute accuracy and print it
-    accuracy = accuracy_score(actuals, rounded_preds)
-    print(f'Accuracy: {accuracy:.4f}')
+    # Print metrics if provided
+    if metrics:
+        print(f'Accuracy: {metrics["accuracy"]:.4f}')
+        print(f'Precision: {metrics["precision"]:.4f}')
+        print(f'Recall: {metrics["recall"]:.4f}')
+        print(f'F1-Score: {metrics["f1"]:.4f}')
+        print(f'MAE: {metrics["mae"]:.4f}')
+        print(f'RMSE: {metrics["rmse"]:.4f}')
     
     print('Confusion Matrix:')
     print(cm)
     
     # Plot confusion matrix
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(10, 8))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
     plt.xlabel('Predicted Ratings')
     plt.ylabel('Actual Ratings')
     plt.title('Confusion Matrix')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_hybrid.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_hybrid_class.png')
+    plt.show()
+
+def plot_metrics(metrics):
+    """
+    Plot all evaluation metrics in a bar chart.
+    
+    Args:
+        metrics (dict): Dictionary containing evaluation metrics.
+    """
+    # Metrics to plot
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+    metric_values = [metrics['accuracy'], metrics['precision'], 
+                     metrics['recall'], metrics['f1']]
+    
+    plt.figure(figsize=(10, 6))
+    bars = plt.bar(metric_names, metric_values, color=['blue', 'green', 'orange', 'red'])
+    
+    # Add values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom')
+    
+    plt.ylim(0, 1.1)  # Set y-axis limit
+    plt.ylabel('Score')
+    plt.title('Classification Metrics')
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_hybrid_class.png')
+    plt.show()
+    
+    # Plot regression metrics (MAE and RMSE) separately
+    plt.figure(figsize=(8, 5))
+    regression_metrics = ['MAE', 'RMSE']
+    regression_values = [metrics['mae'], metrics['rmse']]
+    
+    bars = plt.bar(regression_metrics, regression_values, color=['purple', 'teal'])
+    
+    # Add values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom')
+    
+    plt.ylabel('Error')
+    plt.title('Regression Metrics')
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_hybrid_class.png')
     plt.show()
 
 def plot_roc_auc(probabilities, actuals, classes=None):
@@ -543,29 +635,28 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     )
     
     print("Training completed!")
-    print("Evaluatiing model on test set...")
+    print("Evaluating model on test set...")
     results = evaluate_model(trained_model, test_loader, device, class_weights)
     
     # Plot training history
     plot_training_history(history)
     
-    # Convert lists to NumPy arrays first, then add 1
-    predictions_np = np.array(results['predictions']) 
-    true_labels_np = np.array(results['true_labels'])
+    # Convert indices to user-friendly labels for plotting
+    class_labels = ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]
     
-    # Now add 1 to convert from 0-4 to 1-5 scale for display
+    # Plot confusion matrix
     plot_confusion_matrix(
-        predictions_np + 1, 
-        true_labels_np + 1, 
-        classes=[1, 2, 3, 4, 5]
+        results['predictions'], 
+        results['true_labels'], 
+        classes=class_labels,
+        metrics=results
     )
     
-    # ROC AUC works with 0-indexed values and the raw probabilities
-    plot_roc_auc(
-        results['probabilities'], 
-        results['true_labels'], 
-        classes=[1, 2, 3, 4, 5]
-    )
+    # Plot metrics
+    plot_metrics(results)
+    
+    # Plot ROC AUC curve
+    plot_roc_auc(results['probabilities'], results['true_labels'], classes=class_labels)
     
     return trained_model, history, results
 

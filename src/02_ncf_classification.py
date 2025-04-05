@@ -1,4 +1,3 @@
-
 #! Neural Collaborative Filtering (NCF) Model
 #? In this script we implement NCF to predict user-item ratings (1,2,3,4 or 5).
 
@@ -13,7 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
@@ -331,6 +330,7 @@ def evaluate_model(model, test_loader, criterion, device):
     test_loss = 0.0
     all_preds = []
     all_labels = []
+    all_outputs_raw = []  # Store raw outputs for regression metrics
     
     with torch.no_grad():
         for users, items, ratings in test_loader:
@@ -343,33 +343,62 @@ def evaluate_model(model, test_loader, criterion, device):
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(ratings.cpu().numpy())
+            
+            # Calculate regression-equivalent outputs (weighted average of class probabilities)
+            # For computing MAE and RMSE
+            proba_outputs = F.softmax(outputs, dim=1)
+            rating_values = torch.tensor([0, 1, 2, 3, 4], device=device).float()  # Rating classes (0-indexed)
+            expected_ratings = torch.sum(proba_outputs * rating_values.unsqueeze(0), dim=1)
+            # Convert back to 1-5 scale for metrics
+            expected_ratings = expected_ratings + 1  
+            all_outputs_raw.extend(expected_ratings.cpu().numpy())
     
     # Calculate metrics
     avg_test_loss = test_loss / len(test_loader)
     test_accuracy = accuracy_score(all_labels, all_preds)
+    test_precision = precision_score(all_labels, all_preds, average='macro')
+    test_recall = recall_score(all_labels, all_preds, average='macro')
     test_f1 = f1_score(all_labels, all_preds, average='weighted')
-    conf_matrix = confusion_matrix(all_labels, all_preds)
+    
+    # Convert true labels from 0-indexed to 1-5 scale for regression metrics
+    true_ratings = np.array(all_labels) + 1
+    
+    # Calculate regression metrics
+    mae = mean_absolute_error(true_ratings, all_outputs_raw)
+    rmse = np.sqrt(mean_squared_error(true_ratings, all_outputs_raw))
     
     # Calculate per-class metrics
     class_names = ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]
     per_class_f1 = f1_score(all_labels, all_preds, average=None)
+    per_class_precision = precision_score(all_labels, all_preds, average=None)
+    per_class_recall = recall_score(all_labels, all_preds, average=None)
     
     # Print results
     print(f'Test Loss: {avg_test_loss:.4f}')
     print(f'Test Accuracy: {test_accuracy:.4f}')
+    print(f'Test Precision: {test_precision:.4f}')
+    print(f'Test Recall: {test_recall:.4f}')
     print(f'Test F1 Score (weighted): {test_f1:.4f}')
+    print(f'Test MAE: {mae:.4f}')
+    print(f'Test RMSE: {rmse:.4f}')
     print('Per-class F1 Scores:')
     for i, class_f1 in enumerate(per_class_f1):
         print(f'  {class_names[i]}: {class_f1:.4f}')
     print('Confusion Matrix:')
-    print(conf_matrix)
+    print(confusion_matrix(all_labels, all_preds))
     
     return {
         'test_loss': avg_test_loss,
         'test_accuracy': test_accuracy,
+        'test_precision': test_precision,
+        'test_recall': test_recall,
         'test_f1': test_f1,
         'per_class_f1': per_class_f1,
-        'confusion_matrix': conf_matrix
+        'per_class_precision': per_class_precision,
+        'per_class_recall': per_class_recall,
+        'confusion_matrix': confusion_matrix(all_labels, all_preds),
+        'mae': mae,
+        'rmse': rmse
     }
 
 def plot_training_history(history):
@@ -446,6 +475,53 @@ def get_class_weights(train_loader,device):
     )
     
     return torch.FloatTensor(class_weights).to(device)
+
+def plot_metrics(metrics):
+    """
+    Plot all evaluation metrics in a bar chart.
+    
+    Args:
+        metrics (dict): Dictionary containing evaluation metrics.
+    """
+    # Metrics to plot
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+    metric_values = [metrics['test_accuracy'], metrics['test_precision'], 
+                     metrics['test_recall'], metrics['test_f1']]
+    
+    plt.figure(figsize=(10, 6))
+    bars = plt.bar(metric_names, metric_values, color=['blue', 'green', 'orange', 'red'])
+    
+    # Add values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom')
+    
+    plt.ylim(0, 1.1)  # Set y-axis limit
+    plt.ylabel('Score')
+    plt.title('Classification Metrics')
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_class.png')
+    plt.show()
+    
+    # Plot regression metrics (MAE and RMSE) separately
+    plt.figure(figsize=(8, 5))
+    regression_metrics = ['MAE', 'RMSE']
+    regression_values = [metrics['mae'], metrics['rmse']]
+    
+    bars = plt.bar(regression_metrics, regression_values, color=['purple', 'teal'])
+    
+    # Add values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom')
+    
+    plt.ylabel('Error')
+    plt.title('Regression Metrics')
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_class.png')
+    plt.show()
 
 # Main execution function
 def run_training_pipeline(ratings_file, model_config, train_config):
@@ -538,6 +614,9 @@ def run_training_pipeline(ratings_file, model_config, train_config):
     # Plot confusion matrix
     class_names = ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]
     plot_confusion_matrix(evaluation_results['confusion_matrix'], class_names)
+    
+    # Plot evaluation metrics
+    plot_metrics(evaluation_results)
     
     return trained_model, history, evaluation_results
 
