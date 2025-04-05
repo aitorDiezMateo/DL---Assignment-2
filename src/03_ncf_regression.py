@@ -12,7 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error, roc_curve, auc
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
@@ -20,6 +20,7 @@ import time
 import os
 import seaborn as sns
 from sklearn.preprocessing import LabelEncoder
+from itertools import cycle
 
 
 # Define the model
@@ -140,11 +141,11 @@ def prepare_datasets(ratings_file, val_size=0.1, test_size=0.1, random_state=42)
         stratify=train_val_df['user_id']
     )
     
-        # Reset indices
+    # Reset indices
     train_df = train_df.reset_index(drop=True)
     val_df = val_df.reset_index(drop=True)
     test_df = test_df.reset_index(drop=True)
-    
+        
     print(f"Data split sizes: Train: {len(train_df)}, Validation: {len(val_df)}, Test: {len(test_df)}")
     
     # Create custom datasets
@@ -190,6 +191,14 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
     # Create checkpoint directory if it doesn't exist
     os.makedirs(checkpoint_dir, exist_ok=True)
     
+    # Add learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min', 
+        factor=0.5, 
+        patience=2
+    )
+    
     # Move model to device
     model = model.to(device)
     
@@ -229,6 +238,9 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
             
             # Backward pass
             loss.backward()
+            
+            # Apply gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             # Update weights
             optimizer.step()
@@ -288,7 +300,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': best_val_loss,
-            }, os.path.join(checkpoint_dir, 'best_model.pt'))
+            }, os.path.join(checkpoint_dir, '03_ncf_regression_best_model.pt'))
             
             print(f"Saved best model checkpoint with validation loss: {best_val_loss:.4f}")
         else:
@@ -298,6 +310,14 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
         if epochs_no_improve >= patience:
             print(f'Early stopping triggered! No improvement for {patience} epochs.')
             break
+        
+        # Update learning rate based on validation loss
+        scheduler.step(avg_val_loss)
+        
+        # Print current learning rate
+        for param_group in optimizer.param_groups:
+            current_lr = param_group['lr']
+        print(f"Current learning rate: {current_lr}")
     
     # Calculate training time
     training_time = time.time() - start_time
@@ -305,10 +325,62 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
     print(f'Best model was from epoch {best_epoch+1} with validation loss {best_val_loss:.4f}')
     
     # Load the best model
-    checkpoint = torch.load(os.path.join(checkpoint_dir, 'best_model.pt'))
+    checkpoint = torch.load(os.path.join(checkpoint_dir, '03_ncf_regression_best_model.pt'))
     model.load_state_dict(checkpoint['model_state_dict'])
     
     return model, history
+
+def plot_roc_auc(predictions, actuals, classes=None):
+    """
+    Plot ROC AUC curve for a regression model predicting ratings.
+    We need to convert the regression problem to binary classification problems
+    (one-vs-rest) for each rating class.
+
+    Args:
+        predictions (list or np.array): Predicted ratings.
+        actuals (list or np.array): Actual class labels.
+        classes (list): List of possible rating values.
+    """
+    predictions = np.array(predictions)
+    actuals = np.array(actuals)
+    n_classes = len(classes)
+    
+    # Compute ROC curve and AUC for each class
+    fpr, tpr, roc_auc = {}, {}, {}
+    
+    plt.figure(figsize=(10, 8))
+    colors = cycle(['blue', 'red', 'green', 'purple', 'orange'])
+    
+    for i, rating_class in enumerate(classes):
+        # For each rating, create a binary classification problem
+        # Did we correctly predict this specific rating?
+        binary_actuals = (actuals == rating_class).astype(int)
+        
+        # For the prediction score, use how close the prediction was to this rating
+        # Closer predictions are more confident for this class
+        # Using negative absolute difference as the "score"
+        prediction_scores = -np.abs(predictions - rating_class)
+        
+        # Compute ROC curve
+        fpr[i], tpr[i], _ = roc_curve(binary_actuals, prediction_scores)
+        roc_auc[i] = auc(fpr[i], tpr[i])
+        
+        # Plot ROC curve for this class
+        plt.plot(fpr[i], tpr[i], color=next(colors), lw=2,
+                 label=f'Rating {rating_class} (AUC = {roc_auc[i]:.2f})')
+    
+    # Plot diagonal line (random classifier)
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curves for Rating Prediction')
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_roc_auc.png')
+    plt.show()
 
 def evaluate_model(model, test_loader, device):
     """
@@ -386,7 +458,7 @@ def plot_training_history(history):
     plt.title('Training and Validation Loss')
     plt.legend()
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_reg.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_training_history.png')
     plt.show()
 
 def plot_predictions_vs_actuals(predictions, actuals):
@@ -401,7 +473,7 @@ def plot_predictions_vs_actuals(predictions, actuals):
     plt.title('Predicted vs. Actual Ratings')
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig('predictions_vs_actuals.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_predictions_vs_actuals.png')
     plt.show()
 
 def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
@@ -445,7 +517,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     plt.ylabel('Actual Ratings')
     plt.title('Confusion Matrix')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_reg.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_confusion_matrix.png')
     plt.show()
 
 def get_class_weights(train_loader,device):
@@ -487,7 +559,7 @@ def plot_metrics(metrics):
     plt.ylabel('Score')
     plt.title('Classification Metrics')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_reg.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_classification_metrics.png')
     plt.show()
     
     # Plot regression metrics (MAE and RMSE) separately
@@ -506,7 +578,7 @@ def plot_metrics(metrics):
     plt.ylabel('Error')
     plt.title('Regression Metrics')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_reg.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_regression_metrics.png')
     plt.show()
 
 # Main execution function
@@ -634,6 +706,13 @@ def run_training_pipeline(ratings_file, model_config=None, train_config=None):
     
     # Plot evaluation metrics
     plot_metrics(evaluation_results)
+    
+    # Add ROC AUC plot
+    plot_roc_auc(
+        evaluation_results['predictions'], 
+        evaluation_results['true_labels'], 
+        classes=[1, 2, 3, 4, 5]
+    )
     
     return trained_model, history, evaluation_results
 

@@ -222,7 +222,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
             
             loss.backward()
             
-            # Change
+            # Apply gradient clipping to prevent exploding gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
@@ -273,7 +273,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': best_val_loss,
-            }, os.path.join(checkpoint_dir, 'best_model.pt'))
+            }, os.path.join(checkpoint_dir, '04_hybrid_ncf_classification_best_model.pt'))
             
             print(f"Saved best model checkpoint with validation loss: {best_val_loss:.4f}")
         else:
@@ -298,7 +298,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, class_weight
     print(f"Best validation loss: {best_val_loss:.4f} at epoch {best_epoch+1}")
     
     # Load the best model
-    checkpoint = torch.load(os.path.join(checkpoint_dir, 'best_model.pt'))
+    checkpoint = torch.load(os.path.join(checkpoint_dir, '04_hybrid_ncf_classification_best_model.pt'))
     model.load_state_dict(checkpoint['model_state_dict'])
     
     return model, history
@@ -397,7 +397,7 @@ def plot_training_history(history):
     plt.title('Training and Validation Loss')
     plt.legend()
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_hybrid.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/04_hybrid_ncf_classification_training_history.png')
     plt.show()
 
 def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
@@ -432,7 +432,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     plt.ylabel('Actual Ratings')
     plt.title('Confusion Matrix')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_hybrid_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/04_hybrid_ncf_classification_confusion_matrix.png')
     plt.show()
 
 def plot_metrics(metrics):
@@ -460,7 +460,7 @@ def plot_metrics(metrics):
     plt.ylabel('Score')
     plt.title('Classification Metrics')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_hybrid_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/04_hybrid_ncf_classification_classification_metrics.png')
     plt.show()
     
     # Plot regression metrics (MAE and RMSE) separately
@@ -479,7 +479,7 @@ def plot_metrics(metrics):
     plt.ylabel('Error')
     plt.title('Regression Metrics')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_hybrid_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/04_hybrid_ncf_classification_regression_metrics.png')
     plt.show()
 
 def plot_roc_auc(probabilities, actuals, classes=None):
@@ -534,7 +534,7 @@ def plot_roc_auc(probabilities, actuals, classes=None):
     plt.title('ROC Curves (One-vs-Rest)')
     plt.legend(loc="lower right")
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/roc_auc_curve_hybrid_classification.png') # Consider new name
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/04_hybrid_ncf_classification_roc_auc.png')
     plt.show()
 
 def run_training_pipeline(ratings_file, users_file, movies_file,model_config=None, train_config=None):

@@ -152,6 +152,12 @@ train_df = train_df.reset_index(drop=True)
 val_df = val_df.reset_index(drop=True)
 test_df = test_df.reset_index(drop=True)
 
+# Add some noise to user features to create more robust representations
+noise_level = 0.05
+train_df[USER_FEATURES] = train_df[USER_FEATURES] * (1 + np.random.normal(0, noise_level, train_df[USER_FEATURES].shape))
+# Also add slight noise to item features
+train_df[ITEM_FEATURES] = train_df[ITEM_FEATURES] * (1 + np.random.normal(0, noise_level/2, train_df[ITEM_FEATURES].shape))
+
 train_dataset = MovieLensDataset(train_df)
 val_dataset = MovieLensDataset(val_df)
 test_dataset = MovieLensDataset(test_df)
@@ -260,8 +266,8 @@ for epoch in range(num_epochs):
         
         loss.backward()
         
-        # Change
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # Apply gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         
         optimizer.step()
         
@@ -313,7 +319,7 @@ for epoch in range(num_epochs):
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': best_val_loss,
-        }, os.path.join(checkpoint_dir, 'best_model.pt'))
+        }, os.path.join(checkpoint_dir, '06_coral_best_model.pt'))
         
         print(f"Saved best model checkpoint with validation loss: {best_val_loss:.4f}")
     else:
@@ -338,7 +344,7 @@ print(f"Training completed in {training_time:.2f} seconds.")
 print(f"Best validation loss: {best_val_loss:.4f} at epoch {best_epoch+1}")
 
 # Load the best model
-checkpoint = torch.load(os.path.join(checkpoint_dir, 'best_model.pt'))
+checkpoint = torch.load(os.path.join(checkpoint_dir, '06_coral_best_model.pt'))
 model.load_state_dict(checkpoint['model_state_dict'])
 
 # Evaluate the model on the test set
@@ -403,7 +409,7 @@ print(f'F1-Score: {f1:.4f}')
 print(f'MAE: {mae:.4f}')
 print(f'RMSE: {rmse:.4f}')
 
-#Confusion matrix
+# Confusion matrix
 cm = confusion_matrix(all_labels, all_preds)
 plt.figure(figsize=(8, 6))
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=[1,2,3,4,5], yticklabels=[1,2,3,4,5])
@@ -411,7 +417,7 @@ plt.xlabel('Predicted Ratings')
 plt.ylabel('Actual Ratings')
 plt.title('Confusion Matrix')
 plt.tight_layout()
-plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_coral.png')
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_coral_confusion_matrix.png')
 plt.show()
 
 # Plot metrics in bar charts
@@ -431,7 +437,7 @@ plt.ylim(0, 1.1)  # Set y-axis limit
 plt.ylabel('Score')
 plt.title('Classification Metrics')
 plt.tight_layout()
-plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_coral.png')
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_coral_classification_metrics.png')
 plt.show()
 
 # Plot regression metrics
@@ -450,5 +456,39 @@ for bar in bars:
 plt.ylabel('Error')
 plt.title('Regression Metrics')
 plt.tight_layout()
-plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_coral.png')
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_coral_regression_metrics.png')
+plt.show()
+
+# Add ROC AUC curve plotting
+plt.figure(figsize=(10, 8))
+# Define distinct colors for potentially more classes
+colors = cycle(['blue', 'red', 'green', 'purple', 'orange', 'cyan', 'magenta', 'yellow', 'black', 'grey'])
+
+# Compute ROC curve and AUC for each class using One-vs-Rest
+for i in range(5):
+    # Create binary labels for the current class (One-vs-Rest)
+    binary_actuals = (all_labels == i).astype(int)
+    
+    # Get the probability scores for the current class from the sigmoid outputs
+    class_scores = np.array(all_probs)[:, i]
+    
+    # Compute ROC curve and AUC
+    fpr, tpr, _ = roc_curve(binary_actuals, class_scores)
+    roc_auc = auc(fpr, tpr)
+    
+    # Plot ROC curve for this class
+    plt.plot(fpr, tpr, color=next(colors), lw=2,
+             label=f'Rating {i+1} (AUC = {roc_auc:.2f})')
+
+# Plot diagonal line (random classifier)
+plt.plot([0, 1], [0, 1], 'k--', lw=2, label='Random Chance')
+
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curves for Coral (One-vs-Rest)')
+plt.legend(loc="lower right")
+plt.tight_layout()
+plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_coral_roc_auc.png')
 plt.show()

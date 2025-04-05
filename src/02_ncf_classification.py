@@ -12,12 +12,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score, mean_absolute_error, mean_squared_error, roc_curve, auc
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import RandomOverSampler
 import time
 import os
+from itertools import cycle
 
 # Define the model
 class NCF(nn.Module):
@@ -300,7 +301,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': best_val_loss,
-            }, os.path.join(checkpoint_dir, 'best_model.pt'))
+            }, os.path.join(checkpoint_dir, '02_ncf_classification_best_model.pt'))
             
             print(f"Saved best model checkpoint with validation loss: {best_val_loss:.4f}")
         else:
@@ -317,7 +318,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
     print(f'Best model was from epoch {best_epoch+1} with validation loss {best_val_loss:.4f}')
     
     # Load the best model
-    checkpoint = torch.load(os.path.join(checkpoint_dir, 'best_model.pt'))
+    checkpoint = torch.load(os.path.join(checkpoint_dir, '02_ncf_classification_best_model.pt'))
     model.load_state_dict(checkpoint['model_state_dict'])
     
     return model, history
@@ -331,6 +332,7 @@ def evaluate_model(model, test_loader, criterion, device):
     all_preds = []
     all_labels = []
     all_outputs_raw = []  # Store raw outputs for regression metrics
+    all_probabilities = []  # Store class probabilities for ROC AUC
     
     with torch.no_grad():
         for users, items, ratings in test_loader:
@@ -339,6 +341,9 @@ def evaluate_model(model, test_loader, criterion, device):
             
             loss = criterion(outputs, ratings)
             test_loss += loss.item()
+            
+            # Store probabilities for ROC AUC
+            all_probabilities.extend(outputs.cpu().numpy())
             
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
@@ -398,7 +403,9 @@ def evaluate_model(model, test_loader, criterion, device):
         'per_class_recall': per_class_recall,
         'confusion_matrix': confusion_matrix(all_labels, all_preds),
         'mae': mae,
-        'rmse': rmse
+        'rmse': rmse,
+        'probabilities': all_probabilities,
+        'true_labels': all_labels
     }
 
 def plot_training_history(history):
@@ -408,25 +415,26 @@ def plot_training_history(history):
     plt.figure(figsize=(12, 4))
     
     # Plot loss
-    plt.subplot(1, 2, 1)
     plt.plot(history['train_loss'], label='Train Loss')
     plt.plot(history['val_loss'], label='Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('Training and Validation Loss')
     plt.legend()
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/02_ncf_classification_training_history.png')
+    plt.show()
     
-    # Plot metrics
-    plt.subplot(1, 2, 2)
+    # Plot metrics in a separate figure
+    plt.figure(figsize=(12, 4))
     plt.plot(history['val_accuracy'], label='Accuracy')
     plt.plot(history['val_f1'], label='F1 Score')
     plt.xlabel('Epoch')
     plt.ylabel('Score')
     plt.title('Validation Metrics')
     plt.legend()
-    
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/training_history_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/02_ncf_classification_validation_metrics.png')
     plt.show()
 
 def plot_confusion_matrix(cm, class_names):
@@ -457,7 +465,7 @@ def plot_confusion_matrix(cm, class_names):
                     color="white" if cm[i, j] > thresh else "black")
     
     fig.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/confusion_matrix_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/02_ncf_classification_confusion_matrix.png')
     plt.show()
     return ax
 
@@ -501,7 +509,7 @@ def plot_metrics(metrics):
     plt.ylabel('Score')
     plt.title('Classification Metrics')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/classification_metrics_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/02_ncf_classification_classification_metrics.png')
     plt.show()
     
     # Plot regression metrics (MAE and RMSE) separately
@@ -520,7 +528,62 @@ def plot_metrics(metrics):
     plt.ylabel('Error')
     plt.title('Regression Metrics')
     plt.tight_layout()
-    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/regression_metrics_class.png')
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/02_ncf_classification_regression_metrics.png')
+    plt.show()
+
+# Add plot_roc_auc function after plot_metrics function
+def plot_roc_auc(probabilities, actuals, classes=None):
+    """
+    Plot ROC AUC curve for a multi-class classification model.
+
+    Args:
+        probabilities (list or np.array): Predicted probabilities (shape: [n_samples, n_classes]).
+        actuals (list or np.array): Actual class labels (0-indexed).
+        classes (list): List of class display names (e.g., ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]).
+                        The length must match the number of classes in 'probabilities'.
+    """
+    probabilities = np.array(probabilities)
+    actuals = np.array(actuals)
+    n_classes = probabilities.shape[1]
+
+    if classes is None:
+        classes = [f"Class {i+1}" for i in range(n_classes)]
+    elif len(classes) != n_classes:
+        raise ValueError("Length of 'classes' must match the number of classes in 'probabilities'")
+
+    # Compute ROC curve and AUC for each class using One-vs-Rest
+    fpr, tpr, roc_auc = {}, {}, {}
+
+    plt.figure(figsize=(10, 8))
+    # Define distinct colors for potentially more classes
+    colors = cycle(['blue', 'red', 'green', 'purple', 'orange', 'cyan', 'magenta', 'yellow', 'black', 'grey'])
+
+    for i in range(n_classes):
+        # Get the probability scores for the current class
+        class_scores = probabilities[:, i]
+
+        # Create binary labels for the current class (One-vs-Rest)
+        binary_actuals = (actuals == i).astype(int)
+
+        # Compute ROC curve and AUC
+        fpr[i], tpr[i], _ = roc_curve(binary_actuals, class_scores)
+        roc_auc[i] = auc(fpr[i], tpr[i])
+
+        # Plot ROC curve for this class
+        plt.plot(fpr[i], tpr[i], color=next(colors), lw=2,
+                 label=f'{classes[i]} (AUC = {roc_auc[i]:.2f})') # Use display names from classes arg
+
+    # Plot diagonal line (random classifier)
+    plt.plot([0, 1], [0, 1], 'k--', lw=2, label='Random Chance')
+
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curves (One-vs-Rest)')
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/02_ncf_classification_roc_auc.png')
     plt.show()
 
 # Main execution function
@@ -617,6 +680,9 @@ def run_training_pipeline(ratings_file, model_config, train_config):
     
     # Plot evaluation metrics
     plot_metrics(evaluation_results)
+    
+    # Plot ROC AUC curve
+    plot_roc_auc(evaluation_results['probabilities'], evaluation_results['true_labels'], class_names)
     
     return trained_model, history, evaluation_results
 
