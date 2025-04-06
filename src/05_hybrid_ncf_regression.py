@@ -344,6 +344,12 @@ def evaluate_model(model, test_loader, device):
     f1 = f1_score(all_labels, rounded_preds, average='macro')
     accuracy = accuracy_score(all_labels, rounded_preds)
     
+    # Calculate per-class metrics
+    class_names = ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]
+    per_class_f1 = f1_score(all_labels, rounded_preds, average=None)
+    per_class_precision = precision_score(all_labels, rounded_preds, average=None)
+    per_class_recall = recall_score(all_labels, rounded_preds, average=None)
+    
     # Print all metrics
     print(f'Accuracy: {accuracy:.4f}')
     print(f'Precision: {precision:.4f}')
@@ -351,6 +357,9 @@ def evaluate_model(model, test_loader, device):
     print(f'F1-Score: {f1:.4f}')
     print(f'MAE: {mae:.4f}')
     print(f'RMSE: {rmse:.4f}')
+    print('Per-class F1 Scores:')
+    for i, class_f1 in enumerate(per_class_f1):
+        print(f'  {class_names[i]}: {class_f1:.4f}')
     
     return {
         'test_loss': avg_test_loss,
@@ -360,6 +369,9 @@ def evaluate_model(model, test_loader, device):
         'precision': precision,
         'recall': recall,
         'f1': f1,
+        'per_class_f1': per_class_f1,
+        'per_class_precision': per_class_precision,
+        'per_class_recall': per_class_recall,
         'mae': mae,
         'rmse': rmse
     }
@@ -381,7 +393,7 @@ def plot_training_history(history):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/05_hybrid_ncf_regression_training_history.png')
     plt.show()
 
-def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
+def plot_confusion_matrix(predictions, actuals, classes=None):
     """
     Plot a confusion matrix for the predicted and actual ratings.
 
@@ -389,7 +401,6 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
         predictions (list or np.array): Predicted ratings.
         actuals (list or np.array): Actual ratings.
         classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
-        metrics (dict): Dictionary containing evaluation metrics (optional).
     """
     # Round predictions to the nearest integer
     rounded_preds = np.rint(predictions).astype(int)
@@ -399,19 +410,6 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     
     # Compute confusion matrix
     cm = confusion_matrix(actuals, rounded_preds, labels=classes)
-    
-    # Print metrics if provided, otherwise compute accuracy
-    if metrics:
-        print(f'Accuracy: {metrics["accuracy"]:.4f}')
-        print(f'Precision: {metrics["precision"]:.4f}')
-        print(f'Recall: {metrics["recall"]:.4f}')
-        print(f'F1-Score: {metrics["f1"]:.4f}')
-        print(f'MAE: {metrics["mae"]:.4f}')
-        print(f'RMSE: {metrics["rmse"]:.4f}')
-    else:
-        # Compute accuracy and print it (fallback if metrics not provided)
-        accuracy = accuracy_score(actuals, rounded_preds)
-        print(f'Accuracy: {accuracy:.4f}')
     
     print('Confusion Matrix:')
     print(cm)
@@ -629,7 +627,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     
     # Plot confusion matrix
     plot_confusion_matrix(results['predictions'], results['true_labels'], 
-                         classes=[1, 2, 3, 4, 5], metrics=results)
+                         classes=[1, 2, 3, 4, 5])
     
     # Plot metrics
     plot_metrics(results)

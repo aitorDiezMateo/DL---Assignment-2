@@ -348,6 +348,12 @@ def evaluate_model(model, test_loader, device, class_weights):
     recall = recall_score(all_labels, all_preds, average='macro')
     f1 = f1_score(all_labels, all_preds, average='macro')
     
+    # Calculate per-class metrics
+    class_names = ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]
+    per_class_f1 = f1_score(all_labels, all_preds, average=None)
+    per_class_precision = precision_score(all_labels, all_preds, average=None)
+    per_class_recall = recall_score(all_labels, all_preds, average=None)
+    
     # Convert true labels from 0-indexed to 1-5 scale for regression metrics
     true_ratings = np.array(all_labels) + 1
     
@@ -363,11 +369,9 @@ def evaluate_model(model, test_loader, device, class_weights):
     print(f'F1-Score: {f1:.4f}')
     print(f'MAE: {mae:.4f}')
     print(f'RMSE: {rmse:.4f}')
-    
-    # Compute confusion matrix
-    cm = confusion_matrix(all_labels, all_preds)
-    print('Confusion Matrix:')
-    print(cm)
+    print('Per-class F1 Scores:')
+    for i, class_f1 in enumerate(per_class_f1):
+        print(f'  {class_names[i]}: {class_f1:.4f}')
     
     return {
         'test_loss': avg_test_loss,
@@ -375,9 +379,11 @@ def evaluate_model(model, test_loader, device, class_weights):
         'precision': precision,
         'recall': recall,
         'f1': f1,
+        'per_class_f1': per_class_f1,
+        'per_class_precision': per_class_precision,
+        'per_class_recall': per_class_recall,
         'mae': mae,
         'rmse': rmse,
-        'confusion_matrix': cm,
         'predictions': all_preds,
         'true_labels': all_labels,
         'probabilities': all_probs
@@ -400,7 +406,7 @@ def plot_training_history(history):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/04_hybrid_ncf_classification_training_history.png')
     plt.show()
 
-def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
+def plot_confusion_matrix(predictions, actuals, classes=None):
     """
     Plot a confusion matrix for the predicted and actual ratings.
 
@@ -408,20 +414,11 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
         predictions (list or np.array): Predicted ratings.
         actuals (list or np.array): Actual ratings.
         classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
-        metrics (dict): Dictionary containing evaluation metrics (optional).
     """
     # Compute confusion matrix
     cm = confusion_matrix(actuals, predictions)
     
-    # Print metrics if provided
-    if metrics:
-        print(f'Accuracy: {metrics["accuracy"]:.4f}')
-        print(f'Precision: {metrics["precision"]:.4f}')
-        print(f'Recall: {metrics["recall"]:.4f}')
-        print(f'F1-Score: {metrics["f1"]:.4f}')
-        print(f'MAE: {metrics["mae"]:.4f}')
-        print(f'RMSE: {metrics["rmse"]:.4f}')
-    
+    # Print confusion matrix only
     print('Confusion Matrix:')
     print(cm)
     
@@ -648,8 +645,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     plot_confusion_matrix(
         results['predictions'], 
         results['true_labels'], 
-        classes=class_labels,
-        metrics=results
+        classes=class_labels
     )
     
     # Plot metrics

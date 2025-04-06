@@ -424,6 +424,12 @@ def evaluate_model(model, test_loader, device):
     f1 = f1_score(all_labels, rounded_preds, average='macro')
     accuracy = accuracy_score(all_labels, rounded_preds)
     
+    # Calculate per-class metrics
+    class_names = ["Rating 1", "Rating 2", "Rating 3", "Rating 4", "Rating 5"]
+    per_class_f1 = f1_score(all_labels, rounded_preds, average=None)
+    per_class_precision = precision_score(all_labels, rounded_preds, average=None)
+    per_class_recall = recall_score(all_labels, rounded_preds, average=None)
+    
     # Print all metrics
     print(f'Accuracy: {accuracy:.4f}')
     print(f'Precision: {precision:.4f}')
@@ -431,6 +437,9 @@ def evaluate_model(model, test_loader, device):
     print(f'F1-Score: {f1:.4f}')
     print(f'MAE: {mae:.4f}')
     print(f'RMSE: {rmse:.4f}')
+    print('Per-class F1 Scores:')
+    for i, class_f1 in enumerate(per_class_f1):
+        print(f'  {class_names[i]}: {class_f1:.4f}')
     
     return {
         'test_loss': avg_test_loss,
@@ -440,6 +449,9 @@ def evaluate_model(model, test_loader, device):
         'precision': precision,
         'recall': recall,
         'f1': f1,
+        'per_class_f1': per_class_f1,
+        'per_class_precision': per_class_precision,
+        'per_class_recall': per_class_recall,
         'mae': mae,
         'rmse': rmse
     }
