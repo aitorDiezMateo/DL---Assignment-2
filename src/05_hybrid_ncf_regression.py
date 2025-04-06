@@ -1,5 +1,5 @@
-#! Neural Collaborative Filtering (NCF) Model
-#? In this script we implement NCF to predict user-item ratings (1,2,3,4 or 5).
+#! Hybrid Neural Collaborative Filtering (NCF) Model for Regression
+#? Predicts user-item ratings (1-5) as a continuous regression task using content features
 
 from sklearn.calibration import LabelEncoder
 import torch
@@ -26,33 +26,38 @@ from itertools import cycle
 
 ROUTE = "/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/100k/processed"
 
+# User features from processed data
 USER_FEATURES = ['age', 'gender_F','gender_M', 'occupation_administrator', 'occupation_artist',       'occupation_doctor', 'occupation_educator', 'occupation_engineer', 'occupation_entertainment', 'occupation_executive', 'occupation_healthcare', 'occupation_homemaker','occupation_lawyer','occupation_librarian', 'occupation_marketing', 'occupation_none','occupation_other', 'occupation_programmer', 'occupation_retired','occupation_salesman', 'occupation_scientist', 'occupation_student',
 'occupation_technician', 'occupation_writer', 'release_date']
 
+# Item features from processed data
 ITEM_FEATURES = ['unknown','Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime','Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'Musical','Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western']
 
+# Load data
 ratings_df = pd.read_csv(ROUTE + "/data.csv")
 users_df = pd.read_csv(ROUTE + "/user.csv")
 movies_df = pd.read_csv(ROUTE + "/item.csv")
 
+# Merge data
 data = ratings_df.merge(users_df, on='user_id', how='left')
 data = data.merge(movies_df, on='item_id', how='left')
 
+# Get unique counts
 n_users = data['user_id'].nunique()
 n_items = data['item_id'].nunique()
 
+# Hybrid NCF model combining collaborative filtering with content features
 class HybridNCF(nn.Module):
     def __init__(self, num_users, num_items,
-                embedding_dim=32,  # Reduced from 64
-                mlp_dims=[128, 64], # Simplified architecture
-                dropout_rate=0.5,  # Increased from 0.2
-                l2_regularization=1e-4,  # Added L2 regularization
+                embedding_dim=32,
+                mlp_dims=[128, 64],
+                dropout_rate=0.5,
                 use_batch_norm=True,
                 num_user_features=25,
                 num_item_features=19):
         super(HybridNCF, self).__init__()
         
-        # Add L2 regularization to embeddings
+        # User and item embeddings for both GMF and MLP parts
         self.user_embedding_gmf_cf = nn.Embedding(num_users, embedding_dim, max_norm=1.0)
         self.item_embedding_gmf_cf = nn.Embedding(num_items, embedding_dim, max_norm=1.0)
         self.user_embedding_mlp_cf = nn.Embedding(num_users, embedding_dim, max_norm=1.0)
@@ -78,7 +83,7 @@ class HybridNCF(nn.Module):
         self._init_weights()
         
     def _init_weights(self):
-        """Initialize weights to have reasonable starting values"""
+        # Initialize weights
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
@@ -88,23 +93,22 @@ class HybridNCF(nn.Module):
                 nn.init.normal_(module.weight, std=0.01)
                 
     def forward(self, user_indices, item_indices, user_features, item_features):
-        # GMF path with added batch normalization
+        # GMF path
         user_embed_gmf = self.user_embedding_gmf_cf(user_indices)
         item_embed_gmf = self.item_embedding_gmf_cf(item_indices)
         gmf_vector = user_embed_gmf * item_embed_gmf
         
-        # Add batch normalization to GMF path
+        # Apply batch normalization if available
         if hasattr(self, 'bn_gmf'):
             gmf_vector = self.bn_gmf(gmf_vector)
         
         gmf_output = self.gmf_output(gmf_vector)
         
-        # MLP path (concatenation of embeddings and features)
+        # MLP path
         user_embed_mlp = self.user_embedding_mlp_cf(user_indices)
         item_embed_mlp = self.item_embedding_mlp_cf(item_indices)
         
-        
-        # Concatenate all inputs for MLP path
+        # Concatenate inputs for MLP path
         mlp_vector = torch.cat([
             user_embed_mlp,
             item_embed_mlp,
@@ -116,19 +120,16 @@ class HybridNCF(nn.Module):
         for layer in self.mlp_layers:
             mlp_vector = layer(mlp_vector)
         
-        # MLP output
+        # Get MLP output
         mlp_output = self.mlp_output(mlp_vector)
         
         # Combine GMF and MLP outputs
         combined = torch.cat([gmf_output, mlp_output], dim=1)
         prediction = self.final_output(combined)
         
-        # For rating prediction (1-5), no activation is needed for regression
-        # You could add a sigmoid/tanh + scaling if you want to constrain the range
-        # prediction = 1.0 + 4.0 * torch.sigmoid(prediction)  # Scale to [1,5]
-        
         return prediction.squeeze()
 
+# Dataset class for MovieLens data
 class MovieLensDataset(Dataset):
     def __init__(self, data):
         data.fillna(0, inplace=True)
@@ -147,6 +148,7 @@ class MovieLensDataset(Dataset):
 
 
 def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_size=0.1, random_state=42):
+    # Load and merge data
     ratings_df = pd.read_csv(ratings_file)
     users_df = pd.read_csv(users_file)
     movies_df = pd.read_csv(movies_file)
@@ -154,6 +156,7 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
     data = ratings_df.merge(users_df, on='user_id', how='left')
     data = data.merge(movies_df, on='item_id', how='left')
     
+    # Encode user and item IDs
     user_encoder = LabelEncoder()
     item_encoder = LabelEncoder()
     
@@ -163,17 +166,20 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
     n_users = len(user_encoder.classes_)
     n_items = len(item_encoder.classes_)
     
+    # Split data into train, validation and test sets
     train_val_df, test_df = train_test_split(data, test_size=test_size, random_state=random_state)
     train_df, val_df = train_test_split(train_val_df, test_size=val_size, random_state=random_state)
     
+    # Reset indices
     train_df = train_df.reset_index(drop=True)
     val_df = val_df.reset_index(drop=True)
     test_df = test_df.reset_index(drop=True)
     
-    # Add some noise to user features to create more robust representations
+    # Add noise to user features for better generalization
     noise_level = 0.05
     train_df[USER_FEATURES] = train_df[USER_FEATURES] * (1 + np.random.normal(0, noise_level, train_df[USER_FEATURES].shape))
     
+    # Create datasets
     train_dataset = MovieLensDataset(train_df)
     val_dataset = MovieLensDataset(val_df)
     test_dataset = MovieLensDataset(test_df)
@@ -182,7 +188,7 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
 
 
 def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=20, checkpoint_dir='./checkpoints', patience=5):
-    # Add learning rate scheduler
+    # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='min', 
@@ -190,21 +196,24 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         patience=2
     )
     
+    # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
     
+    # Move model to device
     model = model.to(device)
     
+    # Loss function for regression
     criterion = nn.MSELoss()
     
-    # Initialize tracking variables
+    # Tracking variables
     best_val_loss = np.inf
     best_epoch = 0
     epochs_no_improve = 0
     
-    # History of train/validation losses
+    # History for metrics
     history = {"train_loss": [], "val_loss": []}
     
-    # Start training loop
+    # Start training
     start_time = time.time()
     for epoch in range(num_epochs):
         model.train()
@@ -212,7 +221,6 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         
         for batch_idx, (users, items, user_features, item_features, ratings) in enumerate(train_loader):
             users, items, user_features, item_features, ratings = users.to(device), items.to(device), user_features.to(device), item_features.to(device), ratings.to(device)
-            
             
             optimizer.zero_grad()
             
@@ -222,7 +230,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
             
             loss.backward()
             
-            # Change
+            # Apply gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
@@ -235,7 +243,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         avg_train_loss = train_loss / len(train_loader)
         history["train_loss"].append(avg_train_loss)
         
-        #Validation pass
+        # Validation phase
         model.eval()
         val_loss = 0.0
         all_preds = []
@@ -251,6 +259,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
                 
                 val_loss += loss.item()
                 
+                # Store predictions and labels
                 all_preds.extend(outputs.cpu().numpy())
                 all_labels.extend(ratings.cpu().numpy())
         
@@ -260,12 +269,12 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         print(f'Epoch {epoch+1}/{num_epochs} - '
               f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
         
+        # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_epoch = epoch
             epochs_no_improve = 0
             
-            # Save the best model
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -277,7 +286,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         else:
             epochs_no_improve += 1
         
-        # Early stopping check
+        # Early stopping
         if epochs_no_improve >= patience:
             print(f'Early stopping triggered! No improvement for {patience} epochs.')
             break
@@ -285,7 +294,6 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         # Update learning rate
         scheduler.step(avg_val_loss)
         
-        # After scheduler.step(avg_val_loss), add:
         for param_group in optimizer.param_groups:
             current_lr = param_group['lr']
             
@@ -303,11 +311,11 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
 
 
 def evaluate_model(model, test_loader, device):
+    # Set model to evaluation mode
     model.eval()
     test_loss = 0.0
     all_preds = []
     all_labels = []
-    
     
     criterion = nn.MSELoss()
     
@@ -328,7 +336,7 @@ def evaluate_model(model, test_loader, device):
     avg_test_loss = test_loss / len(test_loader)
     print(f'Test Loss (MSE): {avg_test_loss:.4f}')
     
-    # Convert predictions to rounded integers for classification metrics
+    # Round predictions for classification metrics
     rounded_preds = np.rint(all_preds).astype(int)
     
     # Ensure predictions are within valid range (1-5)
@@ -377,12 +385,8 @@ def evaluate_model(model, test_loader, device):
     }
 
 def plot_training_history(history):
-    """
-    Plot training history
-    """
+    # Plot loss curves
     plt.figure(figsize=(12, 4))
-    
-    # Plot loss
     plt.plot(history['train_loss'], label='Train Loss')
     plt.plot(history['val_loss'], label='Validation Loss')
     plt.xlabel('Epoch')
@@ -393,23 +397,27 @@ def plot_training_history(history):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/05_hybrid_ncf_regression_training_history.png')
     plt.show()
 
-def plot_confusion_matrix(predictions, actuals, classes=None):
-    """
-    Plot a confusion matrix for the predicted and actual ratings.
-
-    Args:
-        predictions (list or np.array): Predicted ratings.
-        actuals (list or np.array): Actual ratings.
-        classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
-    """
-    # Round predictions to the nearest integer
+def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
+    # Round predictions to nearest integer
     rounded_preds = np.rint(predictions).astype(int)
-    
     # Ensure predictions are within valid range
     rounded_preds = np.clip(rounded_preds, 1, 5)
     
     # Compute confusion matrix
     cm = confusion_matrix(actuals, rounded_preds, labels=classes)
+    
+    # Print metrics if provided
+    if metrics:
+        print(f'Accuracy: {metrics["accuracy"]:.4f}')
+        print(f'Precision: {metrics["precision"]:.4f}')
+        print(f'Recall: {metrics["recall"]:.4f}')
+        print(f'F1-Score: {metrics["f1"]:.4f}')
+        print(f'MAE: {metrics["mae"]:.4f}')
+        print(f'RMSE: {metrics["rmse"]:.4f}')
+    else:
+        # Compute accuracy if metrics not provided
+        accuracy = accuracy_score(actuals, rounded_preds)
+        print(f'Accuracy: {accuracy:.4f}')
     
     print('Confusion Matrix:')
     print(cm)
@@ -425,13 +433,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None):
     plt.show()
 
 def plot_metrics(metrics):
-    """
-    Plot all evaluation metrics in a bar chart.
-    
-    Args:
-        metrics (dict): Dictionary containing evaluation metrics.
-    """
-    # Metrics to plot
+    # Plot classification metrics
     metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
     metric_values = [metrics['accuracy'], metrics['precision'], 
                      metrics['recall'], metrics['f1']]
@@ -445,14 +447,14 @@ def plot_metrics(metrics):
         plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
                  f'{height:.4f}', ha='center', va='bottom')
     
-    plt.ylim(0, 1.1)  # Set y-axis limit
+    plt.ylim(0, 1.1)
     plt.ylabel('Score')
     plt.title('Classification Metrics')
     plt.tight_layout()
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/05_hybrid_ncf_regression_classification_metrics.png')
     plt.show()
     
-    # Plot regression metrics (MAE and RMSE) separately
+    # Plot regression metrics
     plt.figure(figsize=(8, 5))
     regression_metrics = ['MAE', 'RMSE']
     regression_values = [metrics['mae'], metrics['rmse']]
@@ -472,34 +474,22 @@ def plot_metrics(metrics):
     plt.show()
 
 def plot_roc_auc(predictions, actuals, classes=None):
-    """
-    Plot ROC AUC curve for a regression model predicting ratings.
-    We need to convert the regression problem to binary classification problems
-    (one-vs-rest) for each rating class.
-
-    Args:
-        predictions (list or np.array): Predicted ratings.
-        actuals (list or np.array): Actual class labels.
-        classes (list): List of possible rating values.
-    """
+    # Prepare data for ROC curve plotting
     predictions = np.array(predictions)
     actuals = np.array(actuals)
     n_classes = len(classes)
     
-    # Compute ROC curve and AUC for each class
+    # Compute ROC curves
     fpr, tpr, roc_auc = {}, {}, {}
     
     plt.figure(figsize=(10, 8))
     colors = cycle(['blue', 'red', 'green', 'purple', 'orange'])
     
     for i, rating_class in enumerate(classes):
-        # For each rating, create a binary classification problem
-        # Did we correctly predict this specific rating?
+        # Create binary classification problem for each rating
         binary_actuals = (actuals == rating_class).astype(int)
         
-        # For the prediction score, use how close the prediction was to this rating
-        # Closer predictions are more confident for this class
-        # Using negative absolute difference as the "score"
+        # Use negative absolute difference as score
         prediction_scores = -np.abs(predictions - rating_class)
         
         # Compute ROC curve
@@ -523,8 +513,8 @@ def plot_roc_auc(predictions, actuals, classes=None):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/05_hybrid_ncf_regression_roc_auc.png')
     plt.show()
 
-def run_training_pipeline(ratings_file, users_file, movies_file,model_config=None, train_config=None):
-        # Default configurations
+def run_training_pipeline(ratings_file, users_file, movies_file, model_config=None, train_config=None):
+    # Default configurations
     default_model_config = {
         "embedding_dim": 16,
         "mlp_dims": [256, 128, 64],
@@ -533,37 +523,38 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     }
     
     default_train_config = {
-        "batch_size": 128,  # Larger batch size for better gradient estimates
-        "learning_rate": 0.0005,  # Lower learning rate to prevent overfitting
-        "weight_decay": 1e-4,  # Increased weight decay
+        "batch_size": 128,
+        "learning_rate": 0.0005,
+        "weight_decay": 1e-4,
         "num_epochs": 50,
-        "patience": 8,  # More patience for early stopping
-        "val_size": 0.15,  # Larger validation set
+        "patience": 8,
+        "val_size": 0.15,
         "test_size": 0.1
     }
     
     # Update with provided configurations
     if model_config:
         default_model_config.update(model_config)
-        pass
     
     if train_config:
         default_train_config.update(train_config)
-        pass
     
-    #Set manual seed for reproducibility
+    # Set random seed for reproducibility
     torch.manual_seed(42)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-
     
     # Prepare datasets
     print("Preparing datasets...")
-    train_dataset, val_dataset, test_dataset, n_users, n_items = prepare_datasets(ratings_file, users_file, movies_file)
+    train_dataset, val_dataset, test_dataset, n_users, n_items = prepare_datasets(
+        ratings_file, users_file, movies_file,
+        val_size=default_train_config["val_size"],
+        test_size=default_train_config["test_size"]
+    )
     
-        # Create data loaders
+    # Create data loaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=default_train_config["batch_size"],
@@ -588,6 +579,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
     print(f"Number of users: {n_users}, Number of items: {n_items}")
     print(f"Dataset sizes: Train: {len(train_dataset)}, Validation: {len(val_dataset)}, Test: {len(test_dataset)}")
     
+    # Create model
     print("Creating model...")
     model = HybridNCF(
         num_users=n_users,
@@ -600,13 +592,14 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
         num_item_features=len(ITEM_FEATURES)
     )
     
+    # Define optimizer
     optimizer = optim.Adam(
         model.parameters(), 
         lr=default_train_config["learning_rate"], 
         weight_decay=default_train_config["weight_decay"]
     )
     
-    # Train the model
+    # Train model
     print("Starting training...")
     trained_model, history = train_model(
         model, 
@@ -618,31 +611,37 @@ def run_training_pipeline(ratings_file, users_file, movies_file,model_config=Non
         patience=default_train_config["patience"]
     )
     
+    # Evaluate model
     print("Training completed!")
-    print("Evaluatiing model on test set...")
+    print("Evaluating model on test set...")
     results = evaluate_model(trained_model, test_loader, device)
     
-    # Plot training history
+    # Plot results
     plot_training_history(history)
-    
-    # Plot confusion matrix
-    plot_confusion_matrix(results['predictions'], results['true_labels'], 
-                         classes=[1, 2, 3, 4, 5])
-    
-    # Plot metrics
+    plot_confusion_matrix(
+        results['predictions'], 
+        results['true_labels'], 
+        classes=[1, 2, 3, 4, 5],
+        metrics=results
+    )
     plot_metrics(results)
-    
-    # Plot ROC AUC curve
-    plot_roc_auc(results['predictions'], results['true_labels'], classes=[1, 2, 3, 4, 5])
+    plot_roc_auc(
+        results['predictions'], 
+        results['true_labels'], 
+        classes=[1, 2, 3, 4, 5]
+    )
     
     return trained_model, history, results
 
 
+# Main execution
 if __name__ == "__main__":
+    # File paths
     ratings_file = ROUTE + "/data.csv"
     users_file = ROUTE + "/user.csv"
     movies_file = ROUTE + "/item.csv"
     
+    # Model configuration
     model_config = {
         "embedding_dim": 16,
         "mlp_dims": [256, 128, 64],
@@ -650,16 +649,18 @@ if __name__ == "__main__":
         "use_batch_norm": True
     }
     
+    # Training configuration
     train_config = {
-        "batch_size": 128,  # Larger batch size for better gradient estimates
-        "learning_rate": 0.0005,  # Lower learning rate to prevent overfitting
-        "weight_decay": 1e-4,  # Increased weight decay
+        "batch_size": 128,
+        "learning_rate": 0.0005,
+        "weight_decay": 1e-4,
         "num_epochs": 50,
-        "patience": 8,  # More patience for early stopping
-        "val_size": 0.15,  # Larger validation set
+        "patience": 8,
+        "val_size": 0.15,
         "test_size": 0.1
     }
     
+    # Run pipeline
     trained_model, history, results = run_training_pipeline(
         ratings_file=ratings_file,
         users_file=users_file,

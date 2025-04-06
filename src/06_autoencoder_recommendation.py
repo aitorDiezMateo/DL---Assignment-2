@@ -1,5 +1,5 @@
 #! Autoencoder Model for Recommendation System
-#? In this script we implement an Autoencoder model to predict user-item ratings (1,2,3,4 or 5).
+#? Predicts user-item ratings (1-5) using a neural autoencoder approach with content features
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -22,6 +22,7 @@ from itertools import cycle
 
 ROUTE = "/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/100k/processed"
 
+# User features from processed data
 USER_FEATURES = ['age', 'gender_F','gender_M', 'occupation_administrator', 'occupation_artist',
        'occupation_doctor', 'occupation_educator', 'occupation_engineer', 'occupation_entertainment', 
        'occupation_executive', 'occupation_healthcare', 'occupation_homemaker','occupation_lawyer',
@@ -29,34 +30,36 @@ USER_FEATURES = ['age', 'gender_F','gender_M', 'occupation_administrator', 'occu
        'occupation_programmer', 'occupation_retired','occupation_salesman', 'occupation_scientist', 
        'occupation_student', 'occupation_technician', 'occupation_writer', 'release_date']
 
+# Item features from processed data
 ITEM_FEATURES = ['unknown','Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime',
                 'Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'Musical','Mystery', 
                 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western']
 
+# Autoencoder-based recommendation model with optional variational approach
 class AutoencoderRecommender(nn.Module):
     def __init__(self, num_users, num_items, 
                  num_user_features=25, 
                  num_item_features=19,
-                 latent_dim=128,  # Increased latent dimension
-                 hidden_layers=[512, 256, 128],  # Deeper architecture
-                 dropout_rate=0.3,  # Less aggressive dropout
+                 latent_dim=128,
+                 hidden_layers=[512, 256, 128],
+                 dropout_rate=0.3,
                  use_batch_norm=True,
-                 variational=True):  # Add variational option
+                 variational=True):
         super(AutoencoderRecommender, self).__init__()
         
-        # Embedding dimensions for user and item ids - increased size
+        # Set embedding size and model type
         self.embedding_dim = 64
         self.variational = variational
         
-        # Embedding layers for user and item ids
+        # Embedding layers for user and item IDs
         self.user_embedding = nn.Embedding(num_users, self.embedding_dim)
         self.item_embedding = nn.Embedding(num_items, self.embedding_dim)
         
-        # Calculate actual input dimension (user_embed + item_embed + user_features + item_features)
+        # Calculate input dimension (user_embed + item_embed + user_features + item_features)
         encoder_input_dim = self.embedding_dim + self.embedding_dim + num_user_features + num_item_features
         self.input_dim = encoder_input_dim
         
-        # Encoder layers
+        # Build encoder network
         self.encoder_layers = nn.ModuleList()
         
         for dim in hidden_layers:
@@ -67,18 +70,18 @@ class AutoencoderRecommender(nn.Module):
             self.encoder_layers.append(nn.Dropout(dropout_rate))
             encoder_input_dim = dim
         
-        # Latent space - for variational autoencoder, we need mean and log variance
+        # Latent space representation
         if variational:
             self.encoder_mu = nn.Linear(encoder_input_dim, latent_dim)
             self.encoder_logvar = nn.Linear(encoder_input_dim, latent_dim)
         else:
             self.encoder_output = nn.Linear(encoder_input_dim, latent_dim)
         
-        # Decoder layers
+        # Build decoder network
         self.decoder_layers = nn.ModuleList()
         decoder_input_dim = latent_dim
         
-        # Reverse the hidden layers for the decoder
+        # Reverse hidden layers for the decoder
         for dim in reversed(hidden_layers):
             self.decoder_layers.append(nn.Linear(decoder_input_dim, dim))
             if use_batch_norm:
@@ -87,7 +90,7 @@ class AutoencoderRecommender(nn.Module):
             self.decoder_layers.append(nn.Dropout(dropout_rate))
             decoder_input_dim = dim
         
-        # Final output layer (predict rating)
+        # Final output layer for rating prediction
         self.decoder_output = nn.Linear(decoder_input_dim, 1)
         
         # Add residual connection from input to output
@@ -101,7 +104,7 @@ class AutoencoderRecommender(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize weights with He initialization for better convergence"""
+        # Initialize weights with He initialization for better convergence
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.kaiming_normal_(module.weight, nonlinearity='leaky_relu')
@@ -111,7 +114,7 @@ class AutoencoderRecommender(nn.Module):
                 nn.init.normal_(module.weight, mean=0.0, std=0.01)
     
     def encode(self, user_indices, item_indices, user_features, item_features):
-        # Get embeddings
+        # Get embeddings for users and items
         user_emb = self.user_embedding(user_indices)
         item_emb = self.item_embedding(item_indices)
         
@@ -123,12 +126,12 @@ class AutoencoderRecommender(nn.Module):
             item_features
         ], dim=1)
         
-        # Encoder
+        # Apply encoder layers
         x = combined
         for layer in self.encoder_layers:
             x = layer(x)
         
-        # Return latent representation
+        # Return latent representation based on model type
         if self.variational:
             mu = self.encoder_mu(x)
             logvar = self.encoder_logvar(x)
@@ -138,16 +141,13 @@ class AutoencoderRecommender(nn.Module):
             return latent, combined
     
     def reparameterize(self, mu, logvar):
-        """
-        Reparameterization trick: z = mu + std * epsilon
-        where epsilon is randomly sampled from N(0, 1)
-        """
+        # Reparameterization trick for variational autoencoder
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
     
     def decode(self, z):
-        """Decode latent representation back to rating prediction"""
+        # Decode latent representation back to rating prediction
         x = z
         for layer in self.decoder_layers:
             x = layer(x)
@@ -160,7 +160,7 @@ class AutoencoderRecommender(nn.Module):
             mu, logvar, combined = self.encode(user_indices, item_indices, user_features, item_features)
             z = self.reparameterize(mu, logvar)
             
-            # Decode
+            # Decode latent representation
             rating_pred = self.decode(z)
             
             # Add residual connection
@@ -174,7 +174,7 @@ class AutoencoderRecommender(nn.Module):
             # Regular autoencoder approach
             latent, combined = self.encode(user_indices, item_indices, user_features, item_features)
             
-            # Decode
+            # Decode latent representation
             rating_pred = self.decode(latent)
             
             # Add residual connection
@@ -185,6 +185,7 @@ class AutoencoderRecommender(nn.Module):
             
             return final_pred.squeeze(), latent
 
+# Dataset class for MovieLens data
 class MovieLensDataset(Dataset):
     def __init__(self, data):
         data.fillna(0, inplace=True)
@@ -202,6 +203,7 @@ class MovieLensDataset(Dataset):
         return self.users[idx], self.items[idx], self.user_features[idx], self.item_features[idx], self.ratings[idx]
 
 def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_size=0.1, random_state=42):
+    # Load and merge data
     ratings_df = pd.read_csv(ratings_file)
     users_df = pd.read_csv(users_file)
     movies_df = pd.read_csv(movies_file)
@@ -209,6 +211,7 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
     data = ratings_df.merge(users_df, on='user_id', how='left')
     data = data.merge(movies_df, on='item_id', how='left')
     
+    # Encode user and item IDs
     user_encoder = LabelEncoder()
     item_encoder = LabelEncoder()
     
@@ -218,17 +221,20 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
     n_users = len(user_encoder.classes_)
     n_items = len(item_encoder.classes_)
     
+    # Split data into train, validation and test sets
     train_val_df, test_df = train_test_split(data, test_size=test_size, random_state=random_state)
     train_df, val_df = train_test_split(train_val_df, test_size=val_size, random_state=random_state)
     
+    # Reset indices
     train_df = train_df.reset_index(drop=True)
     val_df = val_df.reset_index(drop=True)
     test_df = test_df.reset_index(drop=True)
     
-    # Add some noise to user features to create more robust representations (data augmentation)
+    # Add noise to user features for better generalization
     noise_level = 0.05
     train_df[USER_FEATURES] = train_df[USER_FEATURES] * (1 + np.random.normal(0, noise_level, train_df[USER_FEATURES].shape))
     
+    # Create datasets
     train_dataset = MovieLensDataset(train_df)
     val_dataset = MovieLensDataset(val_df)
     test_dataset = MovieLensDataset(test_df)
@@ -236,7 +242,7 @@ def prepare_datasets(ratings_file, users_file, movies_file, val_size=0.1, test_s
     return train_dataset, val_dataset, test_dataset, n_users, n_items
 
 def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=20, checkpoint_dir='./checkpoints', patience=5):
-    # Add learning rate scheduler
+    # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='min', 
@@ -244,11 +250,13 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         patience=2
     )
     
+    # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
     
+    # Move model to device
     model = model.to(device)
     
-    # Debug: Validate input shapes
+    # Debug mode for shape validation (disabled by default)
     debug = False
     if debug:
         print("Running shape debug...")
@@ -263,13 +271,12 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         print(f"Item features shape: {item_features.shape}")
         print(f"Ratings shape: {ratings.shape}")
         
-        # Move to device
+        # Test forward pass
         users = users.to(device)
         items = items.to(device)
         user_features = user_features.to(device)
         item_features = item_features.to(device)
         
-        # Forward pass to check shapes
         with torch.no_grad():
             model.eval()
             try:
@@ -292,30 +299,27 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
     # MSE loss for rating prediction
     mse_criterion = nn.MSELoss()
     
-    # Add a latent representation regularization term (to encourage compact representations)
-    latent_reg_weight = 0.001  # Reduced weight
+    # Regularization weights
+    latent_reg_weight = 0.001  # For standard autoencoder
     
-    # KL divergence weight - start small and increase over time (KL annealing)
+    # KL divergence weight with annealing schedule
     kl_weight_start = 0.0
     kl_weight_end = 0.1
     kl_weight = kl_weight_start
     
-    # Initialize tracking variables
+    # Tracking variables
     best_val_loss = np.inf
     best_epoch = 0
     epochs_no_improve = 0
     
-    # History of train/validation losses
+    # History for metrics
     history = {"train_loss": [], "val_loss": [], "reconstruction_loss": [], "kl_loss": []}
     
-    # Curriculum learning for ratings
-    # Start by focusing on easier samples (high and low ratings) then gradually introduce harder samples
+    # Curriculum learning parameters
     curriculum_epochs = 5
-    
-    # Teacher forcing rate (start high, gradually decrease)
     teacher_forcing_ratio = 0.8
     
-    # Start training loop
+    # Start training
     start_time = time.time()
     for epoch in range(num_epochs):
         model.train()
@@ -323,7 +327,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         recon_loss_sum = 0.0
         kl_loss_sum = 0.0
         
-        # Update KL weight using annealing schedule
+        # Update KL weight using annealing schedule for variational model
         if model.variational:
             kl_weight = min(kl_weight_end, kl_weight_start + epoch * (kl_weight_end - kl_weight_start) / (num_epochs // 2))
         
@@ -340,7 +344,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
             
             optimizer.zero_grad()
             
-            # Forward pass
+            # Forward pass (different for VAE vs standard autoencoder)
             if model.variational:
                 outputs, z, mu, logvar = model(users, items, user_features, item_features)
                 
@@ -351,7 +355,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
                 kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
                 kl_loss = kl_loss / users.size(0)  # Normalize by batch size
                 
-                # Weighted loss with annealing for KL term
+                # Total loss with KL annealing
                 loss = reconstruction_loss + kl_weight * kl_loss
                 
                 recon_loss_sum += reconstruction_loss.item()
@@ -362,7 +366,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
                 # Calculate reconstruction loss
                 reconstruction_loss = mse_criterion(outputs, ratings.float())
                 
-                # Latent representation regularization (L2)
+                # Latent representation regularization
                 latent_reg = torch.norm(latent, p=2, dim=1).mean()
                 
                 # Total loss
@@ -370,7 +374,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
             
             loss.backward()
             
-            # Gradient clipping to prevent exploding gradients
+            # Apply gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
             
             optimizer.step()
@@ -392,7 +396,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
             history["reconstruction_loss"].append(recon_loss_sum / len(train_loader))
             history["kl_loss"].append(kl_loss_sum / len(train_loader))
         
-        # Validation pass
+        # Validation phase
         model.eval()
         val_loss = 0.0
         val_recon_loss = 0.0
@@ -433,6 +437,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
                 
                 val_loss += loss.item()
                 
+                # Store predictions and targets
                 all_preds.extend(outputs.cpu().numpy())
                 all_labels.extend(ratings.cpu().numpy())
         
@@ -447,12 +452,12 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
             print(f'Epoch {epoch+1}/{num_epochs} - '
                   f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
         
+        # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_epoch = epoch
             epochs_no_improve = 0
             
-            # Save the best model
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -464,7 +469,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         else:
             epochs_no_improve += 1
         
-        # Early stopping check
+        # Early stopping
         if epochs_no_improve >= patience:
             print(f'Early stopping triggered! No improvement for {patience} epochs.')
             break
@@ -472,7 +477,6 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
         # Update learning rate
         scheduler.step(avg_val_loss)
         
-        # After scheduler.step(avg_val_loss), add:
         for param_group in optimizer.param_groups:
             current_lr = param_group['lr']
             
@@ -489,6 +493,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=2
     return model, history
 
 def evaluate_model(model, test_loader, device):
+    # Set model to evaluation mode
     model.eval()
     test_loss = 0.0
     test_recon_loss = 0.0
@@ -496,8 +501,10 @@ def evaluate_model(model, test_loader, device):
     all_preds = []
     all_labels = []
     
+    # Loss function
     criterion = nn.MSELoss()
     
+    # KL weight for VAE model
     kl_weight = 0.1  # Use the final annealed weight
     
     with torch.no_grad():
@@ -508,6 +515,7 @@ def evaluate_model(model, test_loader, device):
             item_features = item_features.to(device)
             ratings = ratings.to(device)
             
+            # Different forward pass based on model type
             if model.variational:
                 outputs, _, mu, logvar = model(users, items, user_features, item_features)
                 
@@ -536,13 +544,14 @@ def evaluate_model(model, test_loader, device):
     avg_test_loss = test_loss / len(test_loader)
     print(f'Test Loss (MSE): {avg_test_loss:.4f}')
     
+    # Print VAE-specific metrics if applicable
     if model.variational:
         avg_recon_loss = test_recon_loss / len(test_loader)
         avg_kl_loss = test_kl_loss / len(test_loader)
         print(f'Test Reconstruction Loss: {avg_recon_loss:.4f}')
         print(f'Test KL Loss: {avg_kl_loss:.4f}')
     
-    # Convert predictions to rounded integers for classification metrics
+    # Round predictions for classification metrics
     rounded_preds = np.rint(all_preds).astype(int)
     
     # Ensure predictions are within valid range (1-5)
@@ -591,9 +600,6 @@ def evaluate_model(model, test_loader, device):
     }
 
 def plot_training_history(history):
-    """
-    Plot training history
-    """
     # Check if we have VAE-specific metrics
     has_vae_metrics = "reconstruction_loss" in history and "kl_loss" in history and len(history["reconstruction_loss"]) > 0
     
@@ -639,7 +645,7 @@ def plot_training_history(history):
     else:
         plt.figure(figsize=(12, 4))
         
-        # Plot loss
+        # Plot loss curves
         plt.plot(history['train_loss'], label='Train Loss')
         plt.plot(history['val_loss'], label='Validation Loss')
         plt.xlabel('Epoch')
@@ -652,16 +658,7 @@ def plot_training_history(history):
     plt.show()
 
 def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
-    """
-    Plot a confusion matrix for the predicted and actual ratings.
-
-    Args:
-        predictions (list or np.array): Predicted ratings.
-        actuals (list or np.array): Actual ratings.
-        classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
-        metrics (dict): Dictionary containing evaluation metrics (optional).
-    """
-    # Round predictions to the nearest integer
+    # Round predictions to nearest integer
     rounded_preds = np.rint(predictions).astype(int)
     
     # Ensure predictions are within valid range
@@ -670,7 +667,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     # Compute confusion matrix
     cm = confusion_matrix(actuals, rounded_preds, labels=classes)
     
-    # Print metrics if provided, otherwise compute accuracy
+    # Print metrics if provided
     if metrics:
         print(f'Accuracy: {metrics["accuracy"]:.4f}')
         print(f'Precision: {metrics["precision"]:.4f}')
@@ -679,7 +676,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
         print(f'MAE: {metrics["mae"]:.4f}')
         print(f'RMSE: {metrics["rmse"]:.4f}')
     else:
-        # Compute accuracy and print it (fallback if metrics not provided)
+        # Compute accuracy if metrics not provided
         accuracy = accuracy_score(actuals, rounded_preds)
         print(f'Accuracy: {accuracy:.4f}')
     
@@ -697,13 +694,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     plt.show()
 
 def plot_metrics(metrics):
-    """
-    Plot all evaluation metrics in a bar chart.
-    
-    Args:
-        metrics (dict): Dictionary containing evaluation metrics.
-    """
-    # Metrics to plot
+    # Plot classification metrics
     metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
     metric_values = [metrics['accuracy'], metrics['precision'], 
                      metrics['recall'], metrics['f1']]
@@ -717,14 +708,14 @@ def plot_metrics(metrics):
         plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
                  f'{height:.4f}', ha='center', va='bottom')
     
-    plt.ylim(0, 1.1)  # Set y-axis limit
+    plt.ylim(0, 1.1)
     plt.ylabel('Score')
     plt.title('Classification Metrics')
     plt.tight_layout()
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_autoencoder_recommendation_classification_metrics.png')
     plt.show()
     
-    # Plot regression metrics (MAE and RMSE) separately
+    # Plot regression metrics
     plt.figure(figsize=(8, 5))
     regression_metrics = ['MAE', 'RMSE']
     regression_values = [metrics['mae'], metrics['rmse']]
@@ -744,25 +735,15 @@ def plot_metrics(metrics):
     plt.show()
 
 def plot_latent_space(model, test_loader, device, n_samples=1000):
-    """
-    Plot the latent space of the autoencoder model.
-    This helps visualize if the model has learned meaningful representations.
-    
-    Args:
-        model: The trained autoencoder model
-        test_loader: DataLoader for the test dataset
-        device: The device to use for inference
-        n_samples: Number of samples to plot
-    """
+    # Visualize the learned latent space to understand model representations
     model.eval()
     
     users_list = []
     items_list = []
     latent_vectors = []
     ratings_list = []
-    original_users = []
-    original_items = []
     
+    # Collect latent representations from model
     with torch.no_grad():
         for users, items, user_features, item_features, ratings in test_loader:
             users = users.to(device)
@@ -772,7 +753,7 @@ def plot_latent_space(model, test_loader, device, n_samples=1000):
             
             if model.variational:
                 _, z, mu, _ = model(users, items, user_features, item_features)
-                latent = mu  # Use mean rather than sampled latent for visualization
+                latent = mu  # Use mean vector for visualization
             else:
                 _, latent = model(users, items, user_features, item_features)
             
@@ -784,13 +765,13 @@ def plot_latent_space(model, test_loader, device, n_samples=1000):
             if len(users_list) >= n_samples:
                 break
     
-    # Convert to numpy arrays
+    # Convert to numpy arrays and limit sample size
     users_np = np.array(users_list[:n_samples])
     items_np = np.array(items_list[:n_samples])
     latent_np = np.array(latent_vectors[:n_samples])
     ratings_np = np.array(ratings_list[:n_samples])
     
-    # Use t-SNE for better visualization of high-dimensional data
+    # Apply t-SNE for dimensionality reduction
     print("Performing t-SNE dimensionality reduction...")
     tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
     latent_2d = tsne.fit_transform(latent_np)
@@ -800,7 +781,7 @@ def plot_latent_space(model, test_loader, device, n_samples=1000):
     latent_2d_pca = pca.fit_transform(latent_np)
     print(f"PCA explained variance ratio: {pca.explained_variance_ratio_}")
     
-    # Create a figure with multiple plots
+    # Create visualization with multiple plots
     plt.figure(figsize=(16, 12))
     
     # Plot 1: t-SNE by rating
@@ -824,10 +805,9 @@ def plot_latent_space(model, test_loader, device, n_samples=1000):
     # Plot 3: t-SNE by user
     plt.subplot(2, 2, 3)
     
-    # Use a color map that can handle many unique users
+    # Use modulo for coloring when there are many users
     unique_users = np.unique(users_np)
     if len(unique_users) > 10:
-        # If many users, just color by user modulo 10
         user_colors = users_np % 10
     else:
         user_colors = users_np
@@ -841,10 +821,9 @@ def plot_latent_space(model, test_loader, device, n_samples=1000):
     # Plot 4: t-SNE by item
     plt.subplot(2, 2, 4)
     
-    # Use a color map that can handle many unique items
+    # Use modulo for coloring when there are many items
     unique_items = np.unique(items_np)
     if len(unique_items) > 10:
-        # If many items, just color by item modulo 10
         item_colors = items_np % 10
     else:
         item_colors = items_np
@@ -859,8 +838,48 @@ def plot_latent_space(model, test_loader, device, n_samples=1000):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_autoencoder_recommendation_latent_space.png')
     plt.show()
 
+def plot_roc_auc(predictions, actuals, classes=None):
+    # Prepare data for ROC curve plotting
+    predictions = np.array(predictions)
+    actuals = np.array(actuals)
+    n_classes = len(classes)
+    
+    # Compute ROC curves
+    fpr, tpr, roc_auc = {}, {}, {}
+    
+    plt.figure(figsize=(10, 8))
+    colors = cycle(['blue', 'red', 'green', 'purple', 'orange'])
+    
+    for i, rating_class in enumerate(classes):
+        # Create binary classification problem for each rating
+        binary_actuals = (actuals == rating_class).astype(int)
+        
+        # Use negative absolute difference as score
+        prediction_scores = -np.abs(predictions - rating_class)
+        
+        # Compute ROC curve
+        fpr[i], tpr[i], _ = roc_curve(binary_actuals, prediction_scores)
+        roc_auc[i] = auc(fpr[i], tpr[i])
+        
+        # Plot ROC curve for this class
+        plt.plot(fpr[i], tpr[i], color=next(colors), lw=2,
+                 label=f'Rating {rating_class} (AUC = {roc_auc[i]:.2f})')
+    
+    # Plot diagonal line (random classifier)
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curves for Rating Prediction')
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/06_autoencoder_recommendation_roc_auc.png')
+    plt.show()
+
 def run_training_pipeline(ratings_file, users_file, movies_file, model_config=None, train_config=None, debug=False):
-    # Default configurations
+    # Default model configuration
     default_model_config = {
         "latent_dim": 128,
         "hidden_layers": [512, 256, 128],
@@ -869,6 +888,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file, model_config=No
         "variational": True
     }
     
+    # Default training configuration
     default_train_config = {
         "batch_size": 256,
         "learning_rate": 0.001,
@@ -886,7 +906,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file, model_config=No
     if train_config:
         default_train_config.update(train_config)
     
-    # Set manual seed for reproducibility
+    # Set random seed for reproducibility
     torch.manual_seed(42)
     np.random.seed(42)
     
@@ -927,6 +947,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file, model_config=No
     print(f"Number of users: {n_users}, Number of items: {n_items}")
     print(f"Dataset sizes: Train: {len(train_dataset)}, Validation: {len(val_dataset)}, Test: {len(test_dataset)}")
     
+    # Create model
     print("Creating model...")
     model = AutoencoderRecommender(
         num_users=n_users,
@@ -940,23 +961,22 @@ def run_training_pipeline(ratings_file, users_file, movies_file, model_config=No
         variational=default_model_config["variational"]
     )
     
-    # Print model architecture
+    # Print model architecture in debug mode
     if debug:
         print("Model Architecture:")
         print(model)
         total_params = sum(p.numel() for p in model.parameters())
         print(f"Total parameters: {total_params:,}")
     
+    # Define optimizer
     optimizer = optim.Adam(
         model.parameters(), 
         lr=default_train_config["learning_rate"], 
         weight_decay=default_train_config["weight_decay"]
     )
     
-    # Update train_model to include debug flag
+    # Test forward pass in debug mode
     if debug:
-        # Enable debug flag in train_model
-        # Get a small batch for testing
         for batch in train_loader:
             users, items, user_features, item_features, ratings = batch
             print("Sample batch shapes:")
@@ -992,7 +1012,7 @@ def run_training_pipeline(ratings_file, users_file, movies_file, model_config=No
                     raise
             break
     
-    # Train the model
+    # Train model
     print("Starting training...")
     trained_model, history = train_model(
         model, 
@@ -1004,66 +1024,64 @@ def run_training_pipeline(ratings_file, users_file, movies_file, model_config=No
         patience=default_train_config["patience"]
     )
     
+    # Evaluate model
     print("Training completed!")
     print("Evaluating model on test set...")
     results = evaluate_model(trained_model, test_loader, device)
     
-    # Plot training history
+    # Generate visualizations
     plot_training_history(history)
-    
-    # Plot confusion matrix
     plot_confusion_matrix(results['predictions'], results['true_labels'], 
                         classes=[1, 2, 3, 4, 5], metrics=results)
-    
-    # Plot metrics
     plot_metrics(results)
-    
-    # Plot latent space visualization
+    plot_roc_auc(results['predictions'], results['true_labels'], classes=[1, 2, 3, 4, 5])
     plot_latent_space(trained_model, test_loader, device)
     
     return trained_model, history, results
 
 if __name__ == "__main__":
+    # Data file paths
     ratings_file = ROUTE + "/data.csv"
     users_file = ROUTE + "/user.csv"
     movies_file = ROUTE + "/item.csv"
     
-    # Configuration for improved VAE model
+    # Configuration for VAE model
     model_config = {
-        "latent_dim": 128,  # Larger latent space
-        "hidden_layers": [512, 256, 128],  # Deeper network
-        "dropout_rate": 0.3,  # Moderate dropout
+        "latent_dim": 128,
+        "hidden_layers": [512, 256, 128],
+        "dropout_rate": 0.3,
         "use_batch_norm": True,
-        "variational": True  # Enable variational autoencoder
+        "variational": True
     }
     
-    # Alternative configuration for classic autoencoder (for comparison)
+    # Alternative configuration for standard autoencoder
     standard_ae_config = {
         "latent_dim": 128,
         "hidden_layers": [512, 256, 128],
         "dropout_rate": 0.3,
         "use_batch_norm": True,
-        "variational": False  # Classic autoencoder
+        "variational": False
     }
     
-    # Enhanced training hyperparameters
+    # Training hyperparameters
     train_config = {
-        "batch_size": 256,  # Larger batch size for more stable gradients
+        "batch_size": 256,
         "learning_rate": 0.001,
         "weight_decay": 1e-4,
-        "num_epochs": 100,  # Train longer
-        "patience": 15,  # More patience for complex model
+        "num_epochs": 100,
+        "patience": 15,
         "val_size": 0.15,
         "test_size": 0.1
     }
     
-    # Choose which model to use
+    # Choose which model to use (VAE or standard autoencoder)
     use_variational = True
     active_model_config = model_config if use_variational else standard_ae_config
     
-    # Enable debugging by default
+    # Enable debug mode for additional output
     debug = True
     
+    # Run full training pipeline
     trained_model, history, results = run_training_pipeline(
         ratings_file=ratings_file,
         users_file=users_file,

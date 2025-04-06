@@ -1,5 +1,5 @@
-#! Neural Collaborative Filtering (NCF) Model
-#? In this script we implement NCF to predict user-item ratings (1,2,3,4 or 5).
+#! Neural Collaborative Filtering (NCF) Model for Regression
+#? Predicts user-item ratings (1-5) as a continuous regression task
 
 import torch
 from torch.utils.data import Dataset
@@ -23,7 +23,7 @@ from sklearn.preprocessing import LabelEncoder
 from itertools import cycle
 
 
-# Define the model
+# Define the NCF model for regression
 class NCF(nn.Module):
     def __init__(self, num_users, num_items, embedding_dim=64, mlp_dims=[128, 64, 32, 16], 
                 dropout_rate=0.2, use_batch_norm=True):
@@ -37,7 +37,7 @@ class NCF(nn.Module):
         self.user_embedding_mlp = nn.Embedding(num_users, embedding_dim)
         self.item_embedding_mlp = nn.Embedding(num_items, embedding_dim)
         
-        # MLP tower structure with configurable layers
+        # MLP tower structure
         self.mlp_layers = nn.ModuleList()
         input_dim = embedding_dim * 2
         
@@ -62,7 +62,7 @@ class NCF(nn.Module):
         # Final output layer for regression (output a single value)
         self.final_layer = nn.Linear(embedding_dim + mlp_dims[-1], 1)
     
-        # NEW: Add output scaling parameters (Uncomment to delete)
+        # Output scaling parameters
         self.scale = nn.Parameter(torch.tensor(4.0))  # 5-1 = 4 rating range
         self.shift = nn.Parameter(torch.tensor(1.0))  # Minimum rating
     
@@ -70,7 +70,7 @@ class NCF(nn.Module):
         self._init_weights()
         
     def _init_weights(self):
-        """Initialize weights using Xavier/Glorot initialization"""
+        # Initialize weights
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
@@ -105,36 +105,29 @@ class NCF(nn.Module):
         scaled_output = torch.sigmoid(raw_output) * self.scale + self.shift
         
         return scaled_output.squeeze()
-        
-        # return raw_output.squeeze()  # Return continuous ratings (batch_size,)
 
 
 def prepare_datasets(ratings_file, val_size=0.1, test_size=0.1, random_state=42):
-    """
-    Prepare train, validation, and test datasets
-    """
     # Read ratings data
     ratings_df = pd.read_csv(ratings_file)
     
-    # Use LabelEncoder for user_id and item_id to ensure consecutive integers starting from 0
+    # Encode user and item IDs
     user_encoder = LabelEncoder()
     item_encoder = LabelEncoder()
     
-    # Fit and transform the user_id and item_id columns
+    # Transform IDs to consecutive integers
     ratings_df['user_id'] = user_encoder.fit_transform(ratings_df['user_id'])
     ratings_df['item_id'] = item_encoder.fit_transform(ratings_df['item_id'])
     
-    # Get number of users and items (after encoding)
+    # Get number of users and items
     n_users = len(user_encoder.classes_)
     n_items = len(item_encoder.classes_)
     
-    # First split: separate out test set
+    # Split data into train, validation and test sets
     train_val_df, test_df = train_test_split(
         ratings_df, test_size=test_size, random_state=random_state, stratify=ratings_df['user_id']
     )
     
-    # Second split: separate train and validation sets
-    # Adjust validation size to get the right proportion from the remaining data
     adjusted_val_size = val_size / (1 - test_size)
     train_df, val_df = train_test_split(
         train_val_df, test_size=adjusted_val_size, random_state=random_state, 
@@ -153,7 +146,7 @@ def prepare_datasets(ratings_file, val_size=0.1, test_size=0.1, random_state=42)
         def __init__(self, ratings_df):
             self.users = torch.LongTensor(ratings_df['user_id'].values)
             self.items = torch.LongTensor(ratings_df['item_id'].values)
-            self.ratings = torch.LongTensor(ratings_df['rating'].values)  # Use 0-indexed classes
+            self.ratings = torch.LongTensor(ratings_df['rating'].values)
             
         def __len__(self):
             return len(self.users)
@@ -170,25 +163,7 @@ def prepare_datasets(ratings_file, val_size=0.1, test_size=0.1, random_state=42)
 def train_ncf_model(model, train_loader, val_loader, optimizer, 
                     device, num_epochs=10, patience=3, checkpoint_dir='./checkpoints',
                     class_weights=None):
-    """
-    Train the NCF model for regression
-    
-    Args:
-        model: NCF model
-        train_loader: Training data loader
-        val_loader: Validation data loader
-        optimizer: Optimizer (e.g., Adam)
-        criterion: Loss function (e.g., CrossEntropyLoss)
-        device: Device to run training on (CPU or GPU)
-        num_epochs: Maximum number of training epochs
-        patience: Early stopping patience
-        checkpoint_dir: Directory to save model checkpoints
-        class_weights: Weights for each class for weighted loss
-    
-    Returns:
-        Trained model and training history
-    """
-    # Create checkpoint directory if it doesn't exist
+    # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     # Add learning rate scheduler
@@ -202,7 +177,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
     # Move model to device
     model = model.to(device)
     
-    # Use Mean Squared Error (MSE) loss for regression
+    # Use MSE loss for regression
     criterion = nn.MSELoss()
     
     # Initialize tracking variables
@@ -234,12 +209,12 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
             outputs = model(users, items)
             
             # Calculate loss
-            loss = criterion(outputs, ratings.float())  # Ensure ratings are float for regression
+            loss = criterion(outputs, ratings.float())
             
             # Backward pass
             loss.backward()
             
-            # Apply gradient clipping to prevent exploding gradients
+            # Apply gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             # Update weights
@@ -274,7 +249,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
                 loss = criterion(outputs, ratings.float())
                 val_loss += loss.item()
                 
-                # Store predictions and labels for metrics calculation
+                # Store predictions and labels
                 all_preds.extend(outputs.cpu().numpy())
                 all_labels.extend(ratings.cpu().numpy())
         
@@ -288,7 +263,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
         print(f'Epoch {epoch+1}/{num_epochs} - '
               f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
         
-        # Check if this is the best model so far
+        # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_epoch = epoch
@@ -311,7 +286,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
             print(f'Early stopping triggered! No improvement for {patience} epochs.')
             break
         
-        # Update learning rate based on validation loss
+        # Update learning rate
         scheduler.step(avg_val_loss)
         
         # Print current learning rate
@@ -331,16 +306,7 @@ def train_ncf_model(model, train_loader, val_loader, optimizer,
     return model, history
 
 def plot_roc_auc(predictions, actuals, classes=None):
-    """
-    Plot ROC AUC curve for a regression model predicting ratings.
-    We need to convert the regression problem to binary classification problems
-    (one-vs-rest) for each rating class.
-
-    Args:
-        predictions (list or np.array): Predicted ratings.
-        actuals (list or np.array): Actual class labels.
-        classes (list): List of possible rating values.
-    """
+    # Prepare data for ROC curve plotting
     predictions = np.array(predictions)
     actuals = np.array(actuals)
     n_classes = len(classes)
@@ -352,13 +318,10 @@ def plot_roc_auc(predictions, actuals, classes=None):
     colors = cycle(['blue', 'red', 'green', 'purple', 'orange'])
     
     for i, rating_class in enumerate(classes):
-        # For each rating, create a binary classification problem
-        # Did we correctly predict this specific rating?
+        # Create binary classification problem for each rating
         binary_actuals = (actuals == rating_class).astype(int)
         
-        # For the prediction score, use how close the prediction was to this rating
-        # Closer predictions are more confident for this class
-        # Using negative absolute difference as the "score"
+        # Use negative absolute difference as score
         prediction_scores = -np.abs(predictions - rating_class)
         
         # Compute ROC curve
@@ -383,9 +346,7 @@ def plot_roc_auc(predictions, actuals, classes=None):
     plt.show()
 
 def evaluate_model(model, test_loader, device):
-    """
-    Evaluate the model on test data for regression
-    """
+    # Set model to evaluation mode
     model.eval()
     test_loss = 0.0
     all_preds = []
@@ -408,13 +369,13 @@ def evaluate_model(model, test_loader, device):
     avg_test_loss = test_loss / len(test_loader)
     print(f'Test Loss (MSE): {avg_test_loss:.4f}')
     
-    # Convert predictions to rounded integers for classification metrics
+    # Round predictions for classification metrics
     rounded_preds = np.rint(all_preds).astype(int)
     
     # Ensure predictions are within valid range (1-5)
     rounded_preds = np.clip(rounded_preds, 1, 5)
     
-    # Calculate MAE and RMSE
+    # Calculate regression metrics
     mae = mean_absolute_error(all_labels, all_preds)
     rmse = np.sqrt(mean_squared_error(all_labels, all_preds))
     
@@ -457,12 +418,8 @@ def evaluate_model(model, test_loader, device):
     }
 
 def plot_training_history(history):
-    """
-    Plot training history
-    """
+    # Plot loss curves
     plt.figure(figsize=(12, 4))
-    
-    # Plot loss
     plt.plot(history['train_loss'], label='Train Loss')
     plt.plot(history['val_loss'], label='Validation Loss')
     plt.xlabel('Epoch')
@@ -474,9 +431,7 @@ def plot_training_history(history):
     plt.show()
 
 def plot_predictions_vs_actuals(predictions, actuals):
-    """
-    Plot predicted ratings vs. actual ratings for regression
-    """
+    # Create scatter plot of predictions vs actuals
     plt.figure(figsize=(8, 8))
     plt.scatter(actuals, predictions, alpha=0.5, edgecolors='k', color='blue')
     plt.plot([min(actuals), max(actuals)], [min(actuals), max(actuals)], color='red', linestyle='--', linewidth=2)
@@ -488,17 +443,8 @@ def plot_predictions_vs_actuals(predictions, actuals):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_predictions_vs_actuals.png')
     plt.show()
 
-def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
-    """
-    Plot a confusion matrix for the predicted and actual ratings.
-
-    Args:
-        predictions (list or np.array): Predicted ratings.
-        actuals (list or np.array): Actual ratings.
-        classes (list): List of class labels (e.g., [1, 2, 3, 4, 5]).
-        metrics (dict): Dictionary containing evaluation metrics (optional).
-    """
-    # Round predictions to the nearest integer
+def plot_confusion_matrix(predictions, actuals, classes=None):
+    # Round predictions to nearest integer
     rounded_preds = np.rint(predictions).astype(int)
     # Ensure predictions are within valid range
     rounded_preds = np.clip(rounded_preds, 1, 5)
@@ -506,18 +452,10 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     # Compute confusion matrix
     cm = confusion_matrix(actuals, rounded_preds, labels=classes)
     
-    # Print metrics if provided, otherwise compute accuracy
-    if metrics:
-        print(f'Accuracy: {metrics["accuracy"]:.4f}')
-        print(f'Precision: {metrics["precision"]:.4f}')
-        print(f'Recall: {metrics["recall"]:.4f}')
-        print(f'F1-Score: {metrics["f1"]:.4f}')
-        print(f'MAE: {metrics["mae"]:.4f}')
-        print(f'RMSE: {metrics["rmse"]:.4f}')
-    else:
-        # Compute accuracy and print it (fallback if metrics not provided)
-        accuracy = accuracy_score(actuals, rounded_preds)
-        print(f'Accuracy: {accuracy:.4f}')
+
+    # Compute accuracy if metrics not provided
+    accuracy = accuracy_score(actuals, rounded_preds)
+    print(f'Accuracy: {accuracy:.4f}')
     
     print('Confusion Matrix:')
     print(cm)
@@ -533,6 +471,7 @@ def plot_confusion_matrix(predictions, actuals, classes=None, metrics=None):
     plt.show()
 
 def get_class_weights(train_loader,device):
+    # Extract all ratings from the training set
     all_ratings = []
     for _, _, ratings in train_loader.dataset:
         all_ratings.append(ratings)
@@ -548,13 +487,7 @@ def get_class_weights(train_loader,device):
     return torch.FloatTensor(class_weights).to(device)
 
 def plot_metrics(metrics):
-    """
-    Plot all evaluation metrics in a bar chart.
-    
-    Args:
-        metrics (dict): Dictionary containing evaluation metrics.
-    """
-    # Metrics to plot
+    # Plot classification metrics
     metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
     metric_values = [metrics['accuracy'], metrics['precision'], metrics['recall'], metrics['f1']]
     
@@ -574,7 +507,7 @@ def plot_metrics(metrics):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_classification_metrics.png')
     plt.show()
     
-    # Plot regression metrics (MAE and RMSE) separately
+    # Plot regression metrics
     plt.figure(figsize=(8, 5))
     regression_metrics = ['MAE', 'RMSE']
     regression_values = [metrics['mae'], metrics['rmse']]
@@ -593,11 +526,7 @@ def plot_metrics(metrics):
     plt.savefig('/home/adiez/Desktop/Deep Learning/DL - Assignment 2/plots/03_ncf_regression_regression_metrics.png')
     plt.show()
 
-# Main execution function
 def run_training_pipeline(ratings_file, model_config=None, train_config=None):
-    """
-    Run the complete training pipeline
-    """
     # Default configurations
     default_model_config = {
         "embedding_dim": 1024,
@@ -619,13 +548,11 @@ def run_training_pipeline(ratings_file, model_config=None, train_config=None):
     # Update with provided configurations
     if model_config:
         default_model_config.update(model_config)
-        pass
     
     if train_config:
         default_train_config.update(train_config)
-        pass
     
-    #Set random seed
+    # Set random seed for reproducibility
     torch.manual_seed(42)
     
     # Set device
@@ -676,16 +603,13 @@ def run_training_pipeline(ratings_file, model_config=None, train_config=None):
         use_batch_norm=default_model_config["use_batch_norm"]
     )
 
-    
-    # # Define loss function and optimizer
+    # Define loss function and optimizer
     class_weights = get_class_weights(train_loader,device=device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(
         model.parameters(),
         lr=default_train_config["learning_rate"],
         weight_decay=default_train_config["weight_decay"]
     )
-    # Define Class Weights
 
     # Train model
     print("Starting training...")
@@ -694,32 +618,24 @@ def run_training_pipeline(ratings_file, model_config=None, train_config=None):
         train_loader=train_loader,
         val_loader=val_loader,
         optimizer=optimizer,
-        # criterion=criterion,
         device=device,
         num_epochs=default_train_config["num_epochs"],
         patience=default_train_config["patience"],
         class_weights=class_weights
     )
     
-    # Evaluate model on test set
+    # Evaluate model
     print("Evaluating model on test set...")
     evaluation_results = evaluate_model(trained_model, test_loader, device)
     
+    # Plot results
     plot_training_history(history)
-
-    # plot_predictions_vs_actuals(evaluation_results['predictions'], evaluation_results['true_labels'])
-    
     plot_confusion_matrix(
         evaluation_results['predictions'], 
         evaluation_results['true_labels'], 
-        classes=[1, 2, 3, 4, 5],
-        metrics=evaluation_results
+        classes=[1, 2, 3, 4, 5]
     )
-    
-    # Plot evaluation metrics
     plot_metrics(evaluation_results)
-    
-    # Add ROC AUC plot
     plot_roc_auc(
         evaluation_results['predictions'], 
         evaluation_results['true_labels'], 
@@ -728,24 +644,25 @@ def run_training_pipeline(ratings_file, model_config=None, train_config=None):
     
     return trained_model, history, evaluation_results
 
-# Example usage
+# Main execution
 if __name__ == "__main__":
-    # Path to ratings file (e.g., "ml-1m/ratings.csv")
+    # Path to ratings file
     ratings_file = "/home/adiez/Desktop/Deep Learning/DL - Assignment 2/data/100k/processed/data.csv"
     
-    # Custom configurations (optional)
+    # Model configuration
     model_config = {
         "embedding_dim": 32,
         "mlp_dims": [128, 64, 32],
         "dropout_rate": 0.3
     }
     
+    # Training configuration
     train_config = {
         "batch_size": 512,
         "learning_rate": 0.001,
         "num_epochs": 30,
-        "val_size": 0.15,  # 15% for validation
-        "test_size": 0.15   # 15% for testing
+        "val_size": 0.15,
+        "test_size": 0.15
     }
     
     # Run training pipeline
